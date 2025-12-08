@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Arrhythmia Workstation | AI Dashboard</title>
+
+    <style>
+        :root {
+            --bg-dark: #0a0a0a;
+            --panel-bg: rgba(30, 30, 30, 0.6);
+            --border-color: rgba(255, 255, 255, 0.1);
+            --accent-primary: #00ff99;
+            /* Neon Green */
+            --accent-secondary: #00ccff;
+            /* Neon Blue */
+            --text-main: #e0e0e0;
+            --text-muted: #a0a0a0;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-main);
+            overflow: hidden;
+            background-image: radial-gradient(circle at 50% 50%, #1a1a1a 0%, #000 100%);
+        }
+
+        /* Glassmorphism Utilities */
+        .glass-panel {
+            background: var(--panel-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        #topBar {
+            background: rgba(20, 20, 20, 0.8);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            backdrop-filter: blur(5px);
+        }
+
+        #segmentInfo {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--accent-secondary);
+            text-shadow: 0 0 10px rgba(0, 204, 255, 0.3);
+        }
+
+        #navButtons button {
+            margin-left: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--border-color);
+            color: white;
+            transition: all 0.2s;
+        }
+
+        #navButtons button:hover {
+            background: var(--accent-secondary);
+            color: black;
+            box-shadow: 0 0 10px var(--accent-secondary);
+        }
+
+        #uploadForm {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        #uploadForm button {
+            background: linear-gradient(45deg, #0077ff, #00ccff);
+        }
+
+        #mainContainer {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 60px);
+            padding: 10px;
+            gap: 10px;
+            box-sizing: border-box;
+        }
+
+        #ecgArea {
+            flex: 0 0 50%;
+            /* More space for ECG */
+            padding: 0;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #ecgCanvas {
+            width: 100%;
+            height: 100%;
+            background-color: #050505;
+            cursor: crosshair;
+        }
+
+        #infoArea {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            /* 4 Column Grid */
+            gap: 12px;
+            overflow-y: auto;
+            min-height: 0;
+            /* Important for grid overflow */
+            padding-bottom: 20px;
+        }
+
+        .card {
+            background: rgba(40, 40, 40, 0.4);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card h3 {
+            margin: 0 0 12px 0;
+            color: var(--accent-primary);
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 8px;
+        }
+
+        textarea,
+        select,
+        input[type="text"] {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            border: 1px solid var(--border-color);
+            padding: 8px;
+            margin-top: 5px;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        select:focus,
+        textarea:focus,
+        input:focus {
+            outline: none;
+            border-color: var(--accent-secondary);
+        }
+
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: transform 0.1s;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        #probTable {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        #probTable td {
+            padding: 4px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        #probTable tr.highlight {
+            color: var(--accent-primary);
+            font-weight: bold;
+        }
+
+        /* Scanline effect for ECG */
+        #ecgArea::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 2;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="topBar">
+        <div style="display:flex;align-items:center;gap:15px;">
+            <div id="segmentInfo">SEGMENT <span id="segmentID">--</span></div>
+            <div id="navButtons">
+                <button id="prevBtn">◀ Prev</button>
+                <button id="nextBtn">Next ▶</button>
+            </div>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:15px; font-size:13px;">
+            <div class="glass-panel"
+                style="padding:5px 10px; border-radius:6px; display:flex; align-items:center; gap:8px;">
+                <label for="correctorName" style="color:var(--text-muted)">Annotator:</label>
+                <input type="text" id="correctorName" placeholder="Dr. Cardio"
+                    style="width:100px; padding:4px; margin:0; border:none; background:transparent; color:white; font-weight:bold;"
+                    value="Cardiologist">
+            </div>
+
+            <form id="uploadForm" method="POST" action="/upload_and_process" enctype="multipart/form-data">
+                <input type="file" name="file" id="fileInput" accept=".json" style="color:var(--text-muted)">
+                <button type="submit">Upload JSON</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Retrain Bar -->
+    <div style="padding: 0 20px; margin-top:10px; display:flex; justify-content:space-between; align-items:center;">
+        <div id="retrainStatus" style="font-size:12px; font-family:monospace; color:var(--accent-primary);"></div>
+        <button id="retrainBtn" style="background:#222; border:1px solid #444; font-size:11px;">🛠 Retrain Model (using
+            corrections)</button>
+    </div>
+
+    <div id="mainContainer">
+        <div id="ecgArea" class="glass-panel">
+            <canvas id="ecgCanvas"></canvas>
+        </div>
+
+        <div id="infoArea">
+            <!-- 1. Prediction -->
+            <div class="card">
+                <h3>AI Analysis</h3>
+                <div id="arrLabel" style="font-size:16px; font-weight:bold; color:white; margin-bottom:10px;">Loading...
+                </div>
+                <div id="probTableContainer" style="overflow-y:auto; flex:1;"></div>
+            </div>
+
+            <!-- 2. Features -->
+            <div class="card">
+                <h3>Vitals & Features</h3>
+                <div style="font-size:24px; font-weight:300; color:var(--accent-primary); margin-bottom:5px;">
+                    <span id="hrValue">--</span> <span style="font-size:12px; color:var(--text-muted)">BPM</span>
+                </div>
+                <div
+                    style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; font-size:13px; color:var(--text-muted);">
+                    <div>PR Interval:<br><span id="prValue" style="color:white">--</span> ms</div>
+                    <div>QRS Width:<br><span id="qrsValue" style="color:white">--</span> ms</div>
+                </div>
+                <div style="margin-top:15px; font-size:12px; line-height:1.4; color:#ccc;" id="xaiText">
+                    (Explanation text)
+                </div>
+            </div>
+
+            <!-- 3. Annotation Controls -->
+            <div class="card">
+                <h3>Expert Annotation</h3>
+                <label style="font-size:11px; color:var(--text-muted)">Select Correct Diagnosis</label>
+                <select id="annoLabel">
+                    <!-- Javascript will populate this -->
+                    <option value="">Loading...</option>
+                </select>
+
+                <div style="display:flex; gap:10px; margin-top:15px;">
+                    <button id="saveAnnotationBtn" style="background:var(--accent-primary); color:black; flex:1;">Save
+                        Only</button>
+                    <button id="submitAndNextBtn" style="background:var(--accent-secondary); color:black; flex:1;">Save
+                        & Next ➔</button>
+                </div>
+                <div id="annotationStatus" style="margin-top:8px; font-size:11px; text-align:center;"></div>
+            </div>
+
+            <!-- 4. Notes & R-Peaks -->
+            <div class="card">
+                <h3>Clinical Notes</h3>
+                <textarea id="annoNotes" rows="3" placeholder="Add clinical observations..."></textarea>
+
+                <h3 style="margin-top:15px; font-size:12px; border:none; padding:0;">R-Peak Locations (samples)</h3>
+                <textarea id="annoRPeaks" rows="2"
+                    style="font-family:monospace; font-size:11px; color:var(--text-muted);"></textarea>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const INITIAL_SEGMENT_ID = {{ initial_segment_id }};
+        const TARGET_FS = {{ TARGET_FS }};
+    </script>
+
+    <script>
+        let currentSegment = INITIAL_SEGMENT_ID;
+        const canvas = document.getElementById("ecgCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let ecgSignal = [];
+        let ecgRPeaksRaw = "";
+        let saliencyData = [];
+        let viewStart = 0;
+        let viewEnd = 0;
+        let isPanning = false;
+        let lastX = 0;
+
+        // ---- DYNAMIC DROPDOWN ----
+        function populateDropdown(classes) {
+            const sel = document.getElementById("annoLabel");
+            // If already populated with items > 1 (loading is 1), skip
+            if (sel.options.length > 2) return;
+
+            sel.innerHTML = "";
+            classes.forEach(c => {
+                const opt = document.createElement("option");
+                opt.value = c;
+                opt.innerText = c;
+                sel.appendChild(opt);
+            });
+        }
+
+        function resizeCanvas() {
+            canvas.width = canvas.clientWidth;
+            canvas.height = canvas.clientHeight;
+            redrawECG();
+        }
+        window.addEventListener("resize", resizeCanvas);
+        // Initial resize
+        setTimeout(resizeCanvas, 100);
+
+        function parseRPeaks(rpField) {
+            if (!rpField) return [];
+            const s = rpField.toString();
+            if (s.trim() === "") return [];
+            return s.split(",").map(x => parseInt(x.trim())).filter(x => !isNaN(x));
+        }
+
+        function drawGrid(ctx, w, h, startIdx, endIdx, minV, maxV) {
+            ctx.save();
+            ctx.lineWidth = 1;
+
+            const numSamples = endIdx - startIdx;
+            const valueRange = maxV - minV + 1e-6;
+            const pixelsPerValue = (h - 20) / valueRange;
+
+            // Simple Grid
+            const largeTimeStep = 0.2;
+            const secondsPerSample = 1 / TARGET_FS;
+            const startTime = startIdx * secondsPerSample;
+            const endTime = endIdx * secondsPerSample;
+
+            ctx.strokeStyle = "rgba(0, 255, 150, 0.1)";
+            ctx.beginPath();
+
+            // Vertical (Time)
+            let t = Math.floor(startTime / largeTimeStep) * largeTimeStep;
+            while (t < endTime + largeTimeStep) {
+                if (t >= startTime) {
+                    const samplePos = t * TARGET_FS;
+                    const xPos = (samplePos - startIdx) * (w / (numSamples - 1));
+                    ctx.moveTo(xPos, 0);
+                    ctx.lineTo(xPos, h);
+                }
+                t += largeTimeStep;
+            }
+
+            // Horizontal (Amp) - just draws 5 lines for reference
+            for (let i = 1; i < 5; i++) {
+                const y = i * (h / 5);
+                ctx.moveTo(0, y);
+                ctx.lineTo(w, y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function redrawECG() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (!ecgSignal || ecgSignal.length === 0) return;
+
+            const w = canvas.width;
+            const h = canvas.height;
+            const N = ecgSignal.length;
+
+            if (viewEnd <= viewStart) { viewStart = 0; viewEnd = N - 1; }
+
+            const start = Math.max(0, Math.floor(viewStart));
+            const end = Math.min(N - 1, Math.floor(viewEnd));
+            const length = end - start + 1;
+            if (length <= 1) return;
+
+            const seg = ecgSignal.slice(start, end + 1);
+            const minV = Math.min(...seg);
+            const maxV = Math.max(...seg);
+            const scaleY = (h - 20) / (maxV - minV + 1e-6);
+
+            drawGrid(ctx, w, h, start, end, minV, maxV);
+
+            // Saliency
+            if (saliencyData && saliencyData.length === N) {
+                const salSeg = saliencyData.slice(start, end + 1);
+                const maxSal = Math.max(...salSeg, 0.01);
+                for (let i = 0; i < length - 1; i++) {
+                    const x1 = (i / (length - 1)) * w;
+                    const x2 = ((i + 1) / (length - 1)) * w;
+                    const intensity = salSeg[i] / maxSal;
+                    if (intensity > 0.3) {
+                        ctx.fillStyle = `rgba(255, 200, 0, ${Math.min(intensity * 0.6, 0.5)})`;
+                        ctx.fillRect(x1, 0, x2 - x1, h);
+                    }
+                }
+            }
+
+            // Trace
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "#00ff99";
+            ctx.shadowColor = "#00ff99";
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            for (let i = 0; i < length; i++) {
+                const x = (i / (length - 1)) * w;
+                const y = h - 10 - (seg[i] - minV) * scaleY;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            // R-Peaks
+            const rpIdx = parseRPeaks(ecgRPeaksRaw);
+            ctx.fillStyle = "red";
+            rpIdx.forEach(idx => {
+                if (idx >= start && idx <= end) {
+                    const rel = idx - start;
+                    const x = (rel / (length - 1)) * w;
+                    ctx.fillRect(x - 2, 10, 4, 10);
+                    ctx.font = "10px monospace";
+                    ctx.fillText("R", x - 4, 8);
+                }
+            });
+        }
+
+        // Pan/Zoom Events
+        canvas.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            if (!ecgSignal || ecgSignal.length === 0) return;
+            const N = ecgSignal.length;
+            const zoomFactor = (e.deltaY < 0) ? 0.8 : 1.25;
+            let newLength = (viewEnd - viewStart + 1) * zoomFactor;
+            newLength = Math.max(200, Math.min(newLength, N));
+            const center = (viewStart + viewEnd) / 2;
+            let newStart = center - newLength / 2;
+            let newEnd = center + newLength / 2;
+            if (newStart < 0) { newStart = 0; newEnd = newLength - 1; }
+            if (newEnd > N - 1) { newEnd = N - 1; newStart = newEnd - newLength + 1; }
+            viewStart = newStart; viewEnd = newEnd;
+            redrawECG();
+        });
+
+        canvas.addEventListener("mousedown", (e) => { isPanning = true; lastX = e.clientX; });
+        window.addEventListener("mouseup", () => { isPanning = false; });
+        window.addEventListener("mousemove", (e) => {
+            if (!isPanning || !ecgSignal) return;
+            const dx = e.clientX - lastX;
+            lastX = e.clientX;
+            const visibleLen = viewEnd - viewStart + 1;
+            const fraction = dx / canvas.width;
+            const shift = fraction * visibleLen;
+            viewStart -= shift; viewEnd -= shift;
+            redrawECG();
+        });
+
+        function renderProbTable(classes, probs) {
+            const container = document.getElementById("probTableContainer");
+            if (!classes || !probs || classes.length !== probs.length) {
+                container.innerHTML = "<div style='color:#666;'>No data</div>";
+                return;
+            }
+            // Populate Dropdown here as well just in case
+            populateDropdown(classes);
+
+            let indices = Array.from(probs.keys()).sort((a, b) => probs[b] - probs[a]); // Sort desc
+
+            let html = "<table id='probTable'><tbody>";
+            for (let i = 0; i < Math.min(indices.length, 5); i++) { // Top 5
+                let idx = indices[i];
+                const p = probs[idx] * 100;
+                const cls = (i === 0) ? "highlight" : "";
+                html += `<tr class="${cls}"><td>${classes[idx]}</td><td style="text-align:right">${p.toFixed(1)}%</td></tr>`;
+            }
+            html += "</tbody></table>";
+            container.innerHTML = html;
+        }
+
+        async function loadSegment(id) {
+            try {
+                const res = await fetch(`/api/segment/${id}`);
+                const data = await res.json();
+                if (data.error) { alert("Error: " + data.error); return; }
+
+                currentSegment = data.segment_id;
+                document.getElementById("segmentID").innerText = currentSegment;
+
+                ecgSignal = data.raw_signal || [];
+                ecgRPeaksRaw = data.r_peaks || "";
+                viewStart = 0;
+                viewEnd = ecgSignal.length > 0 ? ecgSignal.length - 1 : 0;
+                redrawECG();
+
+                // Vitals
+                document.getElementById("hrValue").innerText = (data.mean_hr > 0) ? data.mean_hr.toFixed(0) : "--";
+                document.getElementById("prValue").innerText = (data.pr_interval > 0) ? data.pr_interval.toFixed(0) : "--";
+                document.getElementById("qrsValue").innerText = (data.qrs_mean_ms > 0) ? data.qrs_mean_ms.toFixed(0) : "--";
+
+                // Annotation
+                if (data.arrhythmia_label) {
+                    document.getElementById("annoLabel").value = data.arrhythmia_label;
+                }
+
+                document.getElementById("annoRPeaks").value = data.r_peaks || "";
+                document.getElementById("annoNotes").value = data.notes || "";
+
+                loadXAIExplanation(id);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function loadXAIExplanation(id) {
+            document.getElementById("arrLabel").innerText = "Analyzing...";
+            const res = await fetch(`/api/xai/${id}`);
+            const data = await res.json();
+
+            if (data.classes) {
+                populateDropdown(data.classes);
+            }
+
+            document.getElementById("arrLabel").innerText = data.pred_label || "Unknown";
+            document.getElementById("xaiText").innerText = data.explanation || "";
+            saliencyData = data.saliency || [];
+
+            redrawECG();
+            if (data.classes && data.probs) {
+                renderProbTable(data.classes, data.probs);
+            }
+        }
+
+        // --- BUTTONS ---
+        document.getElementById("prevBtn").onclick = async () => {
+            const res = await fetch(`/api/prev_segment/${currentSegment}`);
+            const d = await res.json();
+            if (d.ok) loadSegment(d.prev);
+        };
+        document.getElementById("nextBtn").onclick = async () => {
+            const res = await fetch(`/api/next_segment/${currentSegment}`);
+            const d = await res.json();
+            if (d.ok) loadSegment(d.next);
+        };
+
+        const saveAnnotation = async (loadNext) => {
+            const payload = {
+                segment_id: currentSegment,
+                label: document.getElementById("annoLabel").value,
+                r_peaks: document.getElementById("annoRPeaks").value,
+                notes: document.getElementById("annoNotes").value,
+                corrected_by: document.getElementById("correctorName").value
+            };
+            const res = await fetch(`/api/annotate`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            const statusDiv = document.getElementById("annotationStatus");
+            if (data.status === "success") {
+                statusDiv.style.color = "var(--accent-primary)";
+                statusDiv.innerText = "Saved Successfully";
+                if (loadNext) {
+                    const r2 = await fetch(`/api/next_segment/${currentSegment}`);
+                    const d2 = await r2.json();
+                    if (d2.ok) loadSegment(d2.next);
+                }
+            } else {
+                statusDiv.style.color = "red";
+                statusDiv.innerText = "Save Failed: " + data.message;
+            }
+        };
+
+        document.getElementById("saveAnnotationBtn").onclick = () => saveAnnotation(false);
+        document.getElementById("submitAndNextBtn").onclick = () => saveAnnotation(true);
+
+        document.getElementById("retrainBtn").onclick = async () => {
+            const statusDiv = document.getElementById("retrainStatus");
+            statusDiv.innerText = "Exporting & Retraining...";
+            // 1. Export
+            await fetch("/api/export_corrected");
+            // 2. Retrain
+            const res = await fetch("/api/retrain_model", { method: "POST" });
+            const d = await res.json();
+            if (d.error) statusDiv.innerText = "Error: " + d.error;
+            else statusDiv.innerText = "Training Complete. Model Reloaded.";
+        };
+
+        // Start
+        loadSegment(INITIAL_SEGMENT_ID);
+    </script>
+</body>
+
+</html>

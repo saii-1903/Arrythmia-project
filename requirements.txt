@@ -1,0 +1,17 @@
+
+flask
+psycopg2-binary
+numpy
+scipy
+torch
+tqdm
+matplotlib
+customtkinter
+sounddevice
+pyaudio
+wfdb
+requests
+pandas
+shap
+scikit-learn
+wcwidth
