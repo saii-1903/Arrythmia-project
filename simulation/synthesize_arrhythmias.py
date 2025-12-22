@@ -1,5 +1,8 @@
 import numpy as np
-import psycopg2
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 import json
 import random
 import uuid
@@ -289,6 +292,11 @@ class SyntheticECGGenerator:
         return signal, r_peaks
 
 def save_to_db(generator, labels_to_gen):
+    if psycopg2 is None:
+        print("⚠️  Error: 'psycopg2' module not found. Cannot save to database.")
+        print("   Run: pip install psycopg2-binary")
+        return
+
     try:
         conn = psycopg2.connect(**DB_PARAMS)
         cur = conn.cursor()

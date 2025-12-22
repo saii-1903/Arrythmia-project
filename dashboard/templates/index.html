@@ -26,6 +26,8 @@
             color: var(--text-main);
             overflow: hidden;
             background-image: radial-gradient(circle at 50% 50%, #1a1a1a 0%, #000 100%);
+            font-size: 15px;
+            /* Base size up from default */
         }
 
         /* Glassmorphism Utilities */
@@ -48,10 +50,15 @@
         }
 
         #segmentInfo {
-            font-size: 20px;
+            font-size: 24px;
+            /* +4px for visibility */
             font-weight: 600;
             color: var(--accent-secondary);
             text-shadow: 0 0 10px rgba(0, 204, 255, 0.3);
+        }
+
+        #annotationBadge {
+            font-size: 12px !important;
         }
 
         #navButtons button {
@@ -60,6 +67,8 @@
             border: 1px solid var(--border-color);
             color: white;
             transition: all 0.2s;
+            font-size: 14px;
+            /* +1px */
         }
 
         #navButtons button:hover {
@@ -72,7 +81,8 @@
             display: flex;
             align-items: center;
             gap: 10px;
-            font-size: 13px;
+            font-size: 14px;
+            /* +1px */
         }
 
         #uploadForm button {
@@ -90,7 +100,6 @@
 
         #ecgArea {
             flex: 0 0 50%;
-            /* More space for ECG */
             padding: 0;
             border-radius: 12px;
             overflow: hidden;
@@ -108,11 +117,9 @@
             flex: 1;
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            /* 4 Column Grid */
             gap: 12px;
             overflow-y: auto;
             min-height: 0;
-            /* Important for grid overflow */
             padding-bottom: 20px;
         }
 
@@ -128,7 +135,8 @@
         .card h3 {
             margin: 0 0 12px 0;
             color: var(--accent-primary);
-            font-size: 14px;
+            font-size: 16px;
+            /* +2px */
             text-transform: uppercase;
             letter-spacing: 1px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -137,7 +145,8 @@
 
         textarea,
         select,
-        input[type="text"] {
+        input[type="text"],
+        input[type="number"] {
             width: 100%;
             background: rgba(0, 0, 0, 0.3);
             color: #fff;
@@ -147,6 +156,8 @@
             border-radius: 4px;
             box-sizing: border-box;
             font-family: inherit;
+            font-size: 14px;
+            /* Explicit size */
         }
 
         select:focus,
@@ -162,7 +173,8 @@
             border-radius: 6px;
             color: #fff;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 14px;
+            /* +1px */
             font-weight: 500;
             transition: transform 0.1s;
         }
@@ -174,7 +186,8 @@
         #probTable {
             width: 100%;
             border-collapse: collapse;
-            font-size: 12px;
+            font-size: 13px;
+            /* +1px */
         }
 
         #probTable td {
@@ -208,10 +221,22 @@
 
     <div id="topBar">
         <div style="display:flex;align-items:center;gap:15px;">
-            <div id="segmentInfo">SEGMENT <span id="segmentID">--</span></div>
-            <div id="navButtons">
+            <div id="segmentInfo">
+                SEGMENT <span id="segmentID">--</span>
+                <span id="annotationBadge"
+                    style="display:none; margin-left:10px; font-size:11px; background:var(--accent-primary); color:black; padding:2px 6px; border-radius:4px; font-weight:bold; vertical-align:middle;">
+                    ✓ ANNOTATED
+                </span>
+            </div>
+            <div id="navButtons" style="display:flex; align-items:center;">
                 <button id="prevBtn">◀ Prev</button>
                 <button id="nextBtn">Next ▶</button>
+
+                <div style="margin-left:15px; display:flex; gap:5px; align-items:center;">
+                    <input type="number" id="jumpInput" placeholder="#"
+                        style="width:60px; padding:4px; font-size:12px; height:28px; margin:0;">
+                    <button id="jumpBtn" style="padding:4px 10px; height:28px;">Go</button>
+                </div>
             </div>
         </div>
 
@@ -349,40 +374,94 @@
 
         function drawGrid(ctx, w, h, startIdx, endIdx, minV, maxV) {
             ctx.save();
-            ctx.lineWidth = 1;
+            ctx.clearRect(0, 0, w, h); // Clear for clean redraw
 
             const numSamples = endIdx - startIdx;
-            const valueRange = maxV - minV + 1e-6;
-            const pixelsPerValue = (h - 20) / valueRange;
 
-            // Simple Grid
-            const largeTimeStep = 0.2;
-            const secondsPerSample = 1 / TARGET_FS;
-            const startTime = startIdx * secondsPerSample;
-            const endTime = endIdx * secondsPerSample;
+            // --- STANDARD ECG SCALING ENFORCEMENT ---
+            // We want 1mV = X pixels AND 1s = 2.5 * X pixels (standard 25mm/s vs 10mm/mV)
+            // But on a digital zoomable screen, we just want grid lines to align with UNITS.
+            // Major Grid = 0.20s (5mm) / 0.5mV (5mm)
+            // Minor Grid = 0.04s (1mm) / 0.1mV (1mm)
 
-            ctx.strokeStyle = "rgba(0, 255, 150, 0.1)";
-            ctx.beginPath();
+            // Vertical Scale (Voltage aka Y-axis)
+            // We already have 'scaleY' passed implicitly via minV/maxV calc in redrawECG
+            // Recalculate robustly here:
+            const valueRange = maxV - minV;
+            // scaleY is pixels per 1 Volt (because valueRange is in V/mV units)
+            // Actually, values are usually in mV. Let's assume input signal is mV.
+            // If scaleY = pixels per unit.
+            const scaleY = h / (valueRange || 1);
 
-            // Vertical (Time)
-            let t = Math.floor(startTime / largeTimeStep) * largeTimeStep;
-            while (t < endTime + largeTimeStep) {
-                if (t >= startTime) {
-                    const samplePos = t * TARGET_FS;
-                    const xPos = (samplePos - startIdx) * (w / (numSamples - 1));
-                    ctx.moveTo(xPos, 0);
-                    ctx.lineTo(xPos, h);
-                }
-                t += largeTimeStep;
+            // Horizontal Scale (Time aka X-axis)
+            // seconds displayed = numSamples / TARGET_FS
+            const secondsVisible = numSamples / TARGET_FS;
+            const pxPerSecond = w / secondsVisible;
+
+            // Colors - Bright / Neon / Standard Pink Hybrid
+            // Increased opacity and thickness for "Bright" request
+            const colMajor = "rgba(255, 40, 110, 0.75)";  // Very Bright Pink/Red
+            const colMinor = "rgba(255, 60, 120, 0.35)"; // Visible Faint Pink
+
+            ctx.lineWidth = 1;
+
+            // --- VERTICAL LINES (Time) ---
+            // We iterate in time units (seconds)
+            const startTime = startIdx / TARGET_FS;
+            const endTime = endIdx / TARGET_FS;
+
+            // Align to 0.04s grid
+            const timeStep = 0.04;
+            const startGridT = Math.floor(startTime / timeStep) * timeStep;
+
+            for (let t = startGridT; t < endTime + timeStep; t += timeStep) {
+                // Determine if Major (0.2s)
+                // Use epsilon for float precision
+                const isMajor = Math.abs((t / 0.2) - Math.round(t / 0.2)) < 0.001;
+
+                const x = (t - startTime) * pxPerSecond;
+                if (x < -1 || x > w + 1) continue;
+
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, h);
+                ctx.strokeStyle = isMajor ? colMajor : colMinor;
+                ctx.lineWidth = isMajor ? 1.5 : 0.8; // Thicker lines
+                ctx.stroke();
             }
 
-            // Horizontal (Amp) - just draws 5 lines for reference
-            for (let i = 1; i < 5; i++) {
-                const y = i * (h / 5);
+            // --- HORIZONTAL LINES (Voltage) ---
+            // Iterate in Voltage units
+            // Align to 0.1mV grid
+            const voltStep = 0.1;
+            const startGridV = Math.floor(minV / voltStep) * voltStep;
+
+            for (let v = startGridV; v < maxV + voltStep; v += voltStep) {
+                // Determine if Major (0.5mV) - standard is 0.5mV blocks
+                const isMajor = Math.abs((v / 0.5) - Math.round(v / 0.5)) < 0.001;
+
+                // Map Voltage to Y pixel
+                // Note: Standard ECG: Positive is UP. Canvas Y is DOWN.
+                // y = h - (v - minV) * scaleY? 
+                // Let's match the trace logic exactly:
+                // In redrawECG: y = h/2 - (val - midV) * scaleY
+                // Let's reverse-engineer or just map V to Y:
+
+                // We know: h pixels covers [minV, maxV] roughly.
+                // Center is midV = (minV+maxV)/2 which maps to h/2.
+                const midV = (minV + maxV) / 2;
+                const y = (h / 2) - (v - midV) * scaleY;
+
+                if (y < -1 || y > h + 1) continue;
+
+                ctx.beginPath();
                 ctx.moveTo(0, y);
                 ctx.lineTo(w, y);
+                ctx.strokeStyle = isMajor ? colMajor : colMinor;
+                ctx.lineWidth = isMajor ? 1.5 : 0.8; // Thicker lines
+                ctx.stroke();
             }
-            ctx.stroke();
+
             ctx.restore();
         }
 
@@ -394,31 +473,61 @@
             const h = canvas.height;
             const N = ecgSignal.length;
 
+            // Safety Bounds
             if (viewEnd <= viewStart) { viewStart = 0; viewEnd = N - 1; }
+            if (viewStart < 0) viewStart = 0;
+            if (viewEnd > N - 1) viewEnd = N - 1;
 
-            const start = Math.max(0, Math.floor(viewStart));
-            const end = Math.min(N - 1, Math.floor(viewEnd));
-            const length = end - start + 1;
-            if (length <= 1) return;
+            const start = Math.floor(viewStart);
+            const end = Math.floor(viewEnd);
+            const visibleSamples = end - start;
+            if (visibleSamples <= 1) return;
 
+            // 1. Calculate Horizontal Scale
+            const secondsVisible = visibleSamples / TARGET_FS;
+            // pxPerSec = w / visibleSamples * TARGET_FS
+
+            // 2. Vertical Scale: Auto-Fit with fixed margin (Standard Digital Oscilloscope)
             const seg = ecgSignal.slice(start, end + 1);
-            const minV = Math.min(...seg);
-            const maxV = Math.max(...seg);
-            const scaleY = (h - 20) / (maxV - minV + 1e-6);
+            let minV_seg = 9999, maxV_seg = -9999;
+            for (let val of seg) {
+                if (val < minV_seg) minV_seg = val;
+                if (val > maxV_seg) maxV_seg = val;
+            }
+            if (minV_seg > maxV_seg) { minV_seg = -0.5; maxV_seg = 0.5; }
 
-            drawGrid(ctx, w, h, start, end, minV, maxV);
+            let range = maxV_seg - minV_seg;
+            if (range < 0.1) range = 0.1;
+
+            // Fit ~2-3mV or the actual range if larger
+            const fitRange = Math.max(range, 2.0);
+            const scaleY = (h - 40) / fitRange;
+
+            const midV = (minV_seg + maxV_seg) / 2;
+
+            // Calculate Voltage Bounds for Grid
+            const voltageSpan = h / scaleY;
+            const yStartV = midV - (voltageSpan / 2);
+            const yEndV = midV + (voltageSpan / 2);
+
+            // Draw Grid
+            drawGrid(ctx, w, h, start, end, yStartV, yEndV);
 
             // Saliency
             if (saliencyData && saliencyData.length === N) {
                 const salSeg = saliencyData.slice(start, end + 1);
                 const maxSal = Math.max(...salSeg, 0.01);
-                for (let i = 0; i < length - 1; i++) {
-                    const x1 = (i / (length - 1)) * w;
-                    const x2 = ((i + 1) / (length - 1)) * w;
-                    const intensity = salSeg[i] / maxSal;
-                    if (intensity > 0.3) {
-                        ctx.fillStyle = `rgba(255, 200, 0, ${Math.min(intensity * 0.6, 0.5)})`;
-                        ctx.fillRect(x1, 0, x2 - x1, h);
+                const invMaxSal = 1 / maxSal;
+                for (let i = 0; i < visibleSamples; i++) {
+                    const x1 = (i / visibleSamples) * w;
+                    const x2 = ((i + 1) / visibleSamples) * w;
+                    const val = salSeg[i];
+                    if (val > 0) {
+                        const intensity = val * invMaxSal;
+                        if (intensity > 0.3) {
+                            ctx.fillStyle = `rgba(255, 200, 0, ${Math.min(intensity * 0.6, 0.5)})`;
+                            ctx.fillRect(x1, 0, x2 - x1, h);
+                        }
                     }
                 }
             }
@@ -429,9 +538,13 @@
             ctx.shadowColor = "#00ff99";
             ctx.shadowBlur = 10;
             ctx.beginPath();
-            for (let i = 0; i < length; i++) {
-                const x = (i / (length - 1)) * w;
-                const y = h - 10 - (seg[i] - minV) * scaleY;
+
+            const invVisible = 1 / visibleSamples;
+            for (let i = 0; i < visibleSamples; i++) {
+                const x = i * w * invVisible;
+                const val = seg[i];
+                const y = h / 2 - (val - midV) * scaleY;
+
                 if (i === 0) ctx.moveTo(x, y);
                 else ctx.lineTo(x, y);
             }
@@ -440,14 +553,17 @@
 
             // R-Peaks
             const rpIdx = parseRPeaks(ecgRPeaksRaw);
-            ctx.fillStyle = "red";
+            ctx.fillStyle = "rgba(255, 50, 50, 0.8)";
             rpIdx.forEach(idx => {
                 if (idx >= start && idx <= end) {
                     const rel = idx - start;
-                    const x = (rel / (length - 1)) * w;
-                    ctx.fillRect(x - 2, 10, 4, 10);
-                    ctx.font = "10px monospace";
-                    ctx.fillText("R", x - 4, 8);
+                    const x = rel * w * invVisible;
+                    const val = ecgSignal[idx];
+                    const y = h / 2 - (val - midV) * scaleY;
+
+                    ctx.fillRect(x - 3, y - 20, 6, 6);
+                    ctx.font = "11px monospace";
+                    ctx.fillText("R", x - 4, y - 25);
                 }
             });
         }
@@ -457,15 +573,39 @@
             e.preventDefault();
             if (!ecgSignal || ecgSignal.length === 0) return;
             const N = ecgSignal.length;
-            const zoomFactor = (e.deltaY < 0) ? 0.8 : 1.25;
-            let newLength = (viewEnd - viewStart + 1) * zoomFactor;
-            newLength = Math.max(200, Math.min(newLength, N));
-            const center = (viewStart + viewEnd) / 2;
-            let newStart = center - newLength / 2;
-            let newEnd = center + newLength / 2;
-            if (newStart < 0) { newStart = 0; newEnd = newLength - 1; }
-            if (newEnd > N - 1) { newEnd = N - 1; newStart = newEnd - newLength + 1; }
-            viewStart = newStart; viewEnd = newEnd;
+            const length = viewEnd - viewStart + 1;
+
+            if (e.ctrlKey) {
+                // ZOOM (Time Axis)
+                const zoomFactor = (e.deltaY < 0) ? 0.85 : 1.15;
+                let newLength = length * zoomFactor;
+                newLength = Math.max(200, Math.min(newLength, N));
+                const center = (viewStart + viewEnd) / 2;
+                let newStart = center - newLength / 2;
+                let newEnd = center + newLength / 2;
+                if (newStart < 0) { newStart = 0; newEnd = Math.min(newLength - 1, N - 1); }
+                if (newEnd > N - 1) { newEnd = N - 1; newStart = Math.max(0, newEnd - newLength + 1); }
+                viewStart = newStart;
+                viewEnd = newEnd;
+            } else {
+                // PAN (Scroll Time)
+                const shift = (e.deltaY > 0 ? 1 : -1) * (length * 0.1);
+                let newStart = viewStart + shift;
+                let newEnd = viewEnd + shift;
+
+                if (newStart < 0) {
+                    newEnd = newEnd - newStart;
+                    newStart = 0;
+                }
+                if (newEnd > N - 1) {
+                    newStart = newStart - (newEnd - (N - 1));
+                    newEnd = N - 1;
+                }
+                if (newStart < 0) newStart = 0;
+
+                viewStart = newStart;
+                viewEnd = newEnd;
+            }
             redrawECG();
         });
 
@@ -482,14 +622,47 @@
             redrawECG();
         });
 
+        const FULL_CLASS_LIST = [
+            "Sinus Rhythm", "Sinus Bradycardia", "Sinus Tachycardia", "Supraventricular Tachycardia",
+            "Atrial Fibrillation", "Atrial Flutter", "Junctional Rhythm", "Idioventricular Rhythm",
+            "Ventricular Tachycardia", "Ventricular Fibrillation", "1st Degree AV Block",
+            "2nd Degree AV Block Type 1", "2nd Degree AV Block Type 2", "3rd Degree AV Block",
+            "PVCs", "PVC Bigeminy", "PVC Trigeminy", "PVC Couplet",
+            "PAC", "PAC Bigeminy", "Bundle Branch Block", "Artifact",
+            "Sinus Bradycardia + PVC", "Sinus Tachycardia + PVC", "Sinus Bradycardia + PAC",
+            "Sinus Tachycardia + PAC", "Atrial Fibrillation + PVC", "Atrial Flutter + PVC",
+            "1st Degree AV Block + PVC", "Sinus Bradycardia + PVC Bigeminy", "Sinus Tachycardia + PVC Bigeminy",
+            "Atrial Couplet", "Atrial Run", "Ventricular Run", "NSVT", "PSVT", "Pause"
+        ];
+
+        function populateDropdown(serverClasses) {
+            const sel = document.getElementById("annoLabel");
+            // Only populate if empty or strictly necessary to avoid resetting user selection mid-edit
+            if (sel.options.length > 5) return;
+
+            sel.innerHTML = "";
+
+            // Use server classes if provided, otherwise fallback to local full list
+            const classesToUse = (serverClasses && serverClasses.length > 20) ? serverClasses : FULL_CLASS_LIST;
+
+            classesToUse.forEach(c => {
+                const opt = document.createElement("option");
+                opt.value = c;
+                opt.innerText = c;
+                sel.appendChild(opt);
+            });
+        }
+
         function renderProbTable(classes, probs) {
             const container = document.getElementById("probTableContainer");
+
+            // Ensure dropdown is populated with AT LEAST the model classes, or our full list if available
+            populateDropdown(classes || FULL_CLASS_LIST);
+
             if (!classes || !probs || classes.length !== probs.length) {
                 container.innerHTML = "<div style='color:#666;'>No data</div>";
                 return;
             }
-            // Populate Dropdown here as well just in case
-            populateDropdown(classes);
 
             let indices = Array.from(probs.keys()).sort((a, b) => probs[b] - probs[a]); // Sort desc
 
@@ -532,6 +705,15 @@
                 document.getElementById("annoRPeaks").value = data.r_peaks || "";
                 document.getElementById("annoNotes").value = data.notes || "";
 
+                // Show/Hide Annotated Badge
+                const badge = document.getElementById("annotationBadge");
+                if (data.corrected_by) {
+                    badge.style.display = "inline-block";
+                    badge.title = "Annotated by " + data.corrected_by + " on " + (data.corrected_at || "unknown date");
+                } else {
+                    badge.style.display = "none";
+                }
+
                 loadXAIExplanation(id);
             } catch (e) {
                 console.error(e);
@@ -569,6 +751,14 @@
             if (d.ok) loadSegment(d.next);
         };
 
+        // Jump Button Logic
+        document.getElementById("jumpBtn").onclick = () => {
+            const val = document.getElementById("jumpInput").value;
+            if (val) {
+                loadSegment(parseInt(val));
+            }
+        };
+
         const saveAnnotation = async (loadNext) => {
             const payload = {
                 segment_id: currentSegment,
@@ -586,6 +776,14 @@
             if (data.status === "success") {
                 statusDiv.style.color = "var(--accent-primary)";
                 statusDiv.innerText = "Saved Successfully";
+
+                // Show Badge
+                const badge = document.getElementById("annotationBadge");
+                if (badge) {
+                    badge.style.display = "inline-block";
+                    badge.title = "Last annotated by " + payload.corrected_by;
+                }
+
                 if (loadNext) {
                     const r2 = await fetch(`/api/next_segment/${currentSegment}`);
                     const d2 = await r2.json();

@@ -10,6 +10,7 @@ IMPROVED training script with aggressive class balancing strategies:
 """
 
 import os
+import sys
 import json
 import psycopg2
 from pathlib import Path
@@ -52,62 +53,38 @@ class FocalLoss(nn.Module):
 class ECGRawDatasetSQL(torch.utils.data.Dataset):
     def __init__(self, sql_limit=None, augment=False):
         self.augment = augment
+        self.conn_params = {
+            "host": "localhost",
+            "database": "ecg_analysis",
+            "user": "ecg_user",
+            "password": "sais"
+        }
         
-        self.conn = psycopg2.connect(
-            host="localhost",
-            database="ecg_analysis",
-            user="ecg_user",
-            password="sais"
-        )
-        self.conn.autocommit = True
-
-        with self.conn.cursor() as cur:
-            query = """
-                SELECT segment_id, raw_signal, arrhythmia_label, features_json
-                FROM ecg_features_annotatable
-                WHERE raw_signal IS NOT NULL
-                  AND arrhythmia_label IS NOT NULL
-            """
-            if sql_limit:
-                query += f" LIMIT {int(sql_limit)}"
-
-            cur.execute(query)
-            rows = cur.fetchall()
-
+        print("Connecting to DB (Lazy Load Mode)...")
         self.samples = []
-        for seg_id, raw_sig, label, feats in rows:
-            if raw_sig is None:
-                continue
-
-            label_clean = normalize_label(label)
-            if label_clean not in CLASS_INDEX:
-                continue
-
-            # Load and Fix Shape
-            sig = np.asarray(raw_sig, dtype=np.float32)
-            
-            # Resample to common 2500 length (10s @ 250Hz) standard
-            TARGET_LEN = 2500
-            current_len = len(sig)
-            
-            if current_len != TARGET_LEN and current_len > 0:
-                 # Linear interpolation to resize
-                 sig = np.interp(
-                     np.linspace(0, current_len, TARGET_LEN),
-                     np.arange(current_len),
-                     sig
-                 ).astype(np.float32)
-            elif current_len == 0:
-                 sig = np.zeros(TARGET_LEN, dtype=np.float32)
-
-            self.samples.append({
-                "segment_id": seg_id,
-                "signal": sig,
-                "label": CLASS_INDEX[label_clean],
-                "meta": feats or {}
-            })
-
-        print(f"[SQL DATASET] Loaded {len(self.samples)} usable rows")
+        
+        with psycopg2.connect(**self.conn_params) as conn:
+            with conn.cursor() as cur:
+                query = """
+                    SELECT segment_id, arrhythmia_label 
+                    FROM ecg_features_annotatable
+                    WHERE raw_signal IS NOT NULL
+                      AND arrhythmia_label IS NOT NULL
+                      AND arrhythmia_label != 'Unlabeled'
+                """
+                if sql_limit:
+                    query += f" LIMIT {int(sql_limit)}"
+                
+                cur.execute(query)
+                rows = cur.fetchall()
+                
+                for seg_id, label in rows:
+                    if not label: continue
+                    l_clean = normalize_label(label)
+                    if l_clean in CLASS_INDEX:
+                        self.samples.append((seg_id, CLASS_INDEX[l_clean]))
+                        
+        print(f"[SQL DATASET] Indexed {len(self.samples)} segments for training")
 
     def __len__(self):
         return len(self.samples)
@@ -122,15 +99,51 @@ class ECGRawDatasetSQL(torch.utils.data.Dataset):
         signal = signal * scale
         
         # Add small Gaussian noise
-        noise = np.random.normal(0, 0.02 * np.std(signal), signal.shape)
-        signal = signal + noise
+        sigma = 0.02 * np.std(signal)
+        if sigma > 0:
+            noise = np.random.normal(0, sigma, signal.shape)
+            signal = signal + noise
         
         return signal.astype(np.float32)
 
     def __getitem__(self, idx):
-        sample = self.samples[idx].copy()
-        sample["signal"] = self._augment_signal(sample["signal"])
-        return sample
+        seg_id, label_idx = self.samples[idx]
+        
+        # Lazy load signal
+        sig = np.zeros(2500, dtype=np.float32)
+        
+        conn = psycopg2.connect(**self.conn_params)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT raw_signal FROM ecg_features_annotatable WHERE segment_id = %s", (seg_id,))
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                     sig = np.array(row[0], dtype=np.float32)
+        except Exception as e:
+            print(f"Error loading segment {seg_id}: {e}")
+        finally:
+            conn.close()
+
+        # Resample logic
+        TARGET_LEN = 2500
+        current_len = len(sig)
+        
+        if current_len != TARGET_LEN and current_len > 0:
+             idx_old = np.arange(current_len)
+             idx_new = np.linspace(0, current_len - 1, TARGET_LEN)
+             sig = np.interp(idx_new, idx_old, sig).astype(np.float32)
+        elif current_len == 0:
+             # Already zeros
+             pass
+
+        if self.augment:
+            sig = self._augment_signal(sig)
+            
+        return {
+            "signal": sig,
+            "label": label_idx,
+            "meta": {"id": seg_id}
+        }
 
 
 # ---------------------------------------------------------------------
@@ -355,4 +368,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        with open("training_error.log", "w") as f:
+            f.write(traceback.format_exc())
+        print("Training failed. See training_error.log")
+        sys.exit(1)

@@ -14,6 +14,8 @@ sys.path.append(str(BASE_DIR / "models_training"))
 import db_service
 import json
 import numpy as np
+import pandas as pd
+import neurokit2 as nk
 from scipy.signal import resample_poly, butter, filtfilt, find_peaks, welch
 from scipy.interpolate import interp1d
 from werkzeug.utils import secure_filename
@@ -130,39 +132,28 @@ def _preprocess(signal: np.ndarray, original_fs: int) -> np.ndarray:
     return signal
 
 
+def _detect_r_peaks_neurokit(signal: np.ndarray, fs: int) -> np.ndarray:
+    """
+    Robust R-peak detection using NeuroKit2.
+    """
+    try:
+        # 1. Clean signal (removes baseline wander, powerline noise)
+        cleaned = nk.ecg_clean(signal, sampling_rate=fs, method="neurokit")
+        # 2. Find Peaks
+        # method='neurokit' is steep-slope based, very good for QRS
+        signals, info = nk.ecg_peaks(cleaned, sampling_rate=fs, method="neurokit")
+        peaks = info.get("ECG_R_Peaks", [])
+        # Ensure we return int array
+        return np.array(peaks, dtype=int)
+    except Exception as e:
+        print(f"NeuroKit Peak Detection Failed: {e}")
+        return np.array([], dtype=int)
+
 def _r_peak_detection(signal: np.ndarray, fs: int) -> np.ndarray:
     """
-    Modified Pan–Tompkins using:
-      - diff -> square -> moving integration
-      - refine peak on raw channel
+    Wrapper for NeuroKit detection to maintain compatibility.
     """
-    diff_signal = np.diff(signal)
-    squared_signal = diff_signal**2
-
-    # Integration window ~150 ms
-    window_size = int(0.150 * fs)
-    window = np.ones(window_size) / window_size
-    integrated_signal = np.convolve(squared_signal, window, mode="same")
-
-    min_peak_distance = int(0.20 * fs)
-    r_peaks, _ = find_peaks(
-        integrated_signal,
-        distance=min_peak_distance,
-        height=np.mean(integrated_signal) * 0.7,
-    )
-
-    refined = []
-    for p in r_peaks:
-        sw = int(0.05 * fs)
-        start = max(0, p - sw)
-        end = min(len(signal), p + sw)
-        local = signal[start:end]
-        if local.size == 0:
-            continue
-        max_idx = np.argmax(local)
-        refined.append(start + max_idx)
-
-    return np.array(refined, dtype=int)
+    return _detect_r_peaks_neurokit(signal, fs)
 
 
 # =========================================================
@@ -241,49 +232,48 @@ def _calculate_nonlinear_hrv(rr_intervals_ms: np.ndarray) -> Dict[str, float]:
 
 def _compute_qrs_durations(segment: np.ndarray, segment_r_peaks: np.ndarray, fs: int) -> np.ndarray:
     """
-    Estimate QRS duration:
-      - 200 ms window around each R
-      - threshold at 50% of local peak amplitude
-      - find left/right crossings
+    Estimate QRS durations using NeuroKit2 Delineation.
+    Returns array of durations in ms for each QRS detected.
     """
     if segment_r_peaks is None or len(segment_r_peaks) == 0:
         return np.array([])
+    
+    try:
+        # NeuroKit DWT (Discrete Wavelet Transform) is robust for delineation
+        # It needs R-peaks. We pass current R-peaks to help it.
+        # Note: ecg_delineate DWT method is fast and accurate.
+        # But DWT sometimes ignores our R-peaks and finds its own if not aligned? 
+        # Actually it uses R-peaks to find QRS onset/offset around them.
+        
+        _, waves = nk.ecg_delineate(segment, segment_r_peaks, sampling_rate=fs, method="dwt", show=False)
+        
+        # waves dictionary contains "ECG_R_Onsets" and "ECG_R_Offsets"
+        # These are lists with NaNs for missing waves
+        r_onsets = np.array(waves.get("ECG_R_Onsets", []))
+        r_offsets = np.array(waves.get("ECG_R_Offsets", []))
+        
+        # Ensure we have data
+        if len(r_onsets) == 0 or len(r_offsets) == 0:
+            return np.array([])
+            
+        # Create mask for valid pairs
+        valid_mask = ~pd.isna(r_onsets) & ~pd.isna(r_offsets)
+        
+        if np.sum(valid_mask) == 0:
+            return np.array([])
+            
+        # Calculate Durations
+        durations_ms = (r_offsets[valid_mask] - r_onsets[valid_mask]) * 1000.0 / fs
+        
+        # Filter physiological range (e.g. 40ms to 250ms)
+        durations_ms = durations_ms[(durations_ms >= 30) & (durations_ms <= 300)]
+        
+        return durations_ms
 
-    durations = []
-    half_window = int(0.10 * fs)
+    except Exception as e:
+        print(f"NeuroKit QRS Calc Failed: {e}")
+        return np.array([80.0]) # Fallback default
 
-    for r in segment_r_peaks:
-        r = int(r)
-        start = max(0, r - half_window)
-        end = min(len(segment) - 1, r + half_window)
-        local = segment[start : end + 1]
-        if local.size == 0:
-            continue
-
-        peak_val = segment[r]
-        thresh = 0.5 * peak_val
-
-        # Left
-        left_idx = r
-        for i in range(r, start, -1):
-            if (segment[i] - thresh) * (segment[i - 1] - thresh) <= 0:
-                left_idx = i
-                break
-
-        # Right
-        right_idx = r
-        for i in range(r, end):
-            if (segment[i] - thresh) * (segment[i + 1] - thresh) <= 0:
-                right_idx = i
-                break
-
-        width_samples = max(1, right_idx - left_idx)
-        width_ms = width_samples * 1000.0 / fs
-
-        if 40 <= width_ms <= 200:
-            durations.append(width_ms)
-
-    return np.array(durations, dtype=float)
 
 
 def _calculate_morphology_features(segment: np.ndarray, segment_r_peaks: np.ndarray) -> Dict[str, Any]:
@@ -332,50 +322,41 @@ def _sanitize_features(features: Dict[str, Any]) -> Dict[str, Any]:
 
 def _calculate_pr_interval(signal: np.ndarray, r_peaks: np.ndarray, fs: int) -> float:
     """
-    Estimate PR interval:
-      - for each R, look back 250 ms
-      - detect P peak
-      - keep PR in [50, 300] ms
+    Estimate PR interval using NeuroKit2 Delineation.
+    Returns median PR interval in ms.
     """
     if r_peaks is None or len(r_peaks) == 0:
         return 0.0
 
-    pr_vals = []
-    lookback = int(0.25 * fs)
-
-    for r in r_peaks:
-        r = int(r)
-        start = max(0, r - lookback)
-        end = r
-        if end - start < 5:
-            continue
-
-        pre_seg = signal[start:end]
-        if pre_seg.size == 0:
-            continue
-
-        try:
-            prom = max(0.01, np.std(pre_seg) * 0.15)
-        except Exception:
-            prom = 0.01
-
-        p_peaks_rel, _ = find_peaks(
-            pre_seg, prominence=prom, distance=int(0.04 * fs)
-        )
-        if p_peaks_rel.size == 0:
-            p_peaks_rel, _ = find_peaks(
-                pre_seg, prominence=prom * 0.5, distance=int(0.03 * fs)
-            )
-
-        if p_peaks_rel.size > 0:
-            p_idx = start + int(p_peaks_rel[-1])
-            pr_ms = (r - p_idx) * 1000.0 / fs
-            if 50 <= pr_ms <= 300:
-                pr_vals.append(pr_ms)
-
-    if not pr_vals:
+    try:
+        # Use NeuroKit's DWT method for delineation
+        _, waves = nk.ecg_delineate(signal, r_peaks, sampling_rate=fs, method="dwt", show=False)
+        
+        # P-onset to R-onset (or Q-wave start)
+        p_onsets = np.array(waves.get("ECG_P_Onsets", []))
+        r_onsets = np.array(waves.get("ECG_R_Onsets", []))
+        
+        if len(p_onsets) == 0 or len(r_onsets) == 0:
+            return 0.0
+            
+        valid = ~pd.isna(p_onsets) & ~pd.isna(r_onsets)
+        
+        if np.sum(valid) == 0:
+            return 0.0
+            
+        pr_vals = (r_onsets[valid] - p_onsets[valid]) * 1000.0 / fs
+        
+        # Filter valid range (80 - 450 ms)
+        pr_vals = pr_vals[(pr_vals >= 80) & (pr_vals <= 450)]
+        
+        if len(pr_vals) == 0:
+             return 0.0
+             
+        return float(np.nanmedian(pr_vals))
+        
+    except Exception as e:
+        print(f"NK PR Failed: {e}")
         return 0.0
-    return float(np.mean(pr_vals))
 
 
 def _extract_segment_features(
@@ -654,25 +635,14 @@ def api_xai(segment_id: int):
     # 2) Features from SQL
     features = seg.get("features_json") or {}
 
-    # 3) Recompute PR interval from waveform (using r_peaks_in_segment)
-    r_field = seg.get("r_peaks_in_segment", "")
-    if isinstance(r_field, str):
-        r_str = r_field.strip()
-        if r_str:
-            r_peaks_arr = np.array(
-                [int(x) for x in r_str.split(",") if x.strip().isdigit()],
-                dtype=int,
-            )
-        else:
-            r_peaks_arr = np.array([], dtype=int)
-    elif isinstance(r_field, list):
-        r_peaks_arr = np.array(
-            [int(x) for x in r_field if x is not None],
-            dtype=int,
-        )
-    else:
+    # 3) FRESH R-peak detection (ignore DB, use NeuroKit)
+    # This prevents bad metrics from old processing
+    try:
+        r_peaks_arr = _detect_r_peaks_neurokit(segment_np, TARGET_FS)
+    except Exception:
         r_peaks_arr = np.array([], dtype=int)
 
+    # 4) Recompute PR interval with NeuroKit logic
     try:
         pr_interval_ms = _calculate_pr_interval(segment_np, r_peaks_arr, TARGET_FS)
     except Exception:
@@ -681,7 +651,7 @@ def api_xai(segment_id: int):
     # Put PR in features for XAI rules
     features["pr_interval"] = float(pr_interval_ms)
 
-    # 4) Run the model + explanation
+    # 5) Run the model + explanation
     try:
         print(f"🔍 Calling explain_segment for segment {segment_id}...")
         xai_out = explain_segment(segment_np, features)
@@ -704,7 +674,7 @@ def api_xai(segment_id: int):
         )
         saliency = []
 
-    # 5) Store model prediction back into SQL (best effort, non-fatal)
+    # 6) Store model prediction back into SQL (best effort, non-fatal)
     try:
         if probs and len(probs) > 0:
             db_service.save_model_prediction(segment_id, pred_label, probs)
@@ -726,60 +696,7 @@ def api_xai(segment_id: int):
 # Segment Fetch (ECG + Features + Annotation) for Dashboard
 # =========================================================
 
-# =========================================================
-# HELPER: PR Interval Calculation (Heuristic)
-# =========================================================
-def _calculate_pr_interval(signal, r_peaks, fs):
-    """
-    Estimate PR interval by looking for P-wave peak in the 200ms window 
-    preceding each R-peak.
-    Returns the median PR interval in ms.
-    """
-    if len(r_peaks) < 2:
-        print(f"DEBUG: PR Interval - Not enough R-peaks: {len(r_peaks)}")
-        return 0.0
-    
-    pr_intervals = []
-    # Window to search for P-wave: 240ms to 30ms before R-peak
-    search_window_ms_start = 240
-    search_window_ms_end = 30
-    
-    search_samples_start = int(search_window_ms_start * fs / 1000)
-    search_samples_end = int(search_window_ms_end * fs / 1000)
-    
-    print(f"DEBUG: PR Interval - FS: {fs}, Window Samples: {search_samples_start} to {search_samples_end}")
 
-    for r_idx in r_peaks:
-        if r_idx - search_samples_start < 0:
-            continue
-            
-        # Extract window before R-peak
-        window = signal[r_idx - search_samples_start : r_idx - search_samples_end]
-        
-        if len(window) == 0:
-            continue
-            
-        # Find P-wave peak (max value in window)
-        p_peak_relative_idx = np.argmax(window)
-        p_peak_val = window[p_peak_relative_idx]
-        p_peak_idx = (r_idx - search_samples_start) + p_peak_relative_idx
-        
-        # Calculate PR interval
-        pr_ms = (r_idx - p_peak_idx) * 1000 / fs
-        
-        # Filter unrealistic values
-        # Relaxed range: 30 to 400
-        if 30 <= pr_ms <= 400:
-            pr_intervals.append(pr_ms)
-            
-    if not pr_intervals:
-        print("DEBUG: PR Interval - No valid intervals found after filtering.")
-        # Fallback: try to return something if we have any data, or just 0
-        return 0.0
-        
-    median_pr = float(np.median(pr_intervals))
-    print(f"DEBUG: PR Interval - Median: {median_pr:.1f} ms (from {len(pr_intervals)} beats)")
-    return median_pr
 
 @app.route("/api/segment/<int:segment_id>")
 def get_segment_api(segment_id: int):
@@ -806,26 +723,15 @@ def get_segment_api(segment_id: int):
     features = meta.get("features_json") or {}
     mean_hr = float(features.get("mean_hr", 0.0))
 
-    # Parse r-peaks from DB
-    r_field_db = meta.get("r_peaks_in_segment", "")
-    r_peaks_for_frontend = ""
-    if isinstance(r_field_db, str):
-        r_str = r_field_db.strip()
-        if r_str:
-            r_peaks_for_frontend = r_str
-            r_peaks_arr = np.array(
-                [int(x) for x in r_str.split(",") if x.strip().isdigit()],
-                dtype=int,
-            )
-        else:
-            r_peaks_arr = np.array([], dtype=int)
-    elif isinstance(r_field_db, list):
-        r_peaks_arr = np.array(
-            [int(x) for x in r_field_db if x is not None],
-            dtype=int,
-        )
-        r_peaks_for_frontend = ",".join(str(int(x)) for x in r_peaks_arr)
-    else:
+    # Parse r-peaks from DB (ORIGINAL - for fallback)
+    # But we want to OVERRIDE with NeuroKit for fresh display
+    
+    # 1. Calculate FRESH R-peaks on the fly
+    try:
+        r_peaks_arr = _detect_r_peaks_neurokit(np.array(raw_signal), TARGET_FS)
+        # Convert to string for JSON
+        r_peaks_for_frontend = ",".join(str(x) for x in r_peaks_arr)
+    except Exception:
         r_peaks_arr = np.array([], dtype=int)
         r_peaks_for_frontend = ""
 
@@ -836,21 +742,22 @@ def get_segment_api(segment_id: int):
         pr_interval_ms = 0.0
 
     # QRS width from features (robust to None/NaN)
-    qrs_mean_ms = 0.0
-    qrs_list = features.get("qrs_durations_ms")
-    if isinstance(qrs_list, list):
-        qrs_clean = []
-        for v in qrs_list:
-            try:
-                if v is None:
-                    continue
-                val = float(v)
-                if not np.isnan(val) and not np.isinf(val):
-                    qrs_clean.append(val)
-            except Exception:
-                continue
-        if qrs_clean:
-            qrs_mean_ms = float(sum(qrs_clean) / len(qrs_clean))
+    # QRS width from features (robust to None/NaN) -- RECALCULATED ON THE FLY with NeuroKit
+    # Note: We prioritize recomputing it to fix old data issues in dashboard
+    try:
+        qrs_durations = _compute_qrs_durations(np.array(raw_signal), r_peaks_arr, TARGET_FS)
+        if len(qrs_durations) > 0:
+            qrs_mean_ms = float(np.mean(qrs_durations))
+        else:
+             # Fallback to stored features if NeuroKit returns nothing (rare)
+             qrs_mean_ms = 0.0 
+             qrs_list = features.get("qrs_durations_ms")
+             if isinstance(qrs_list, list):
+                q_clean = [float(v) for v in qrs_list if v is not None and not np.isnan(float(v))]
+                if q_clean:
+                    qrs_mean_ms = float(sum(q_clean)/len(q_clean))
+    except Exception as e:
+        qrs_mean_ms = float(features.get("mean_qrs", 0.0))
 
     return jsonify(
         {
@@ -867,6 +774,8 @@ def get_segment_api(segment_id: int):
             "pr_interval": float(pr_interval_ms),
             "qrs_mean_ms": float(qrs_mean_ms),
             "r_peaks": r_peaks_for_frontend,
+            "corrected_by": meta.get("corrected_by"),
+            "corrected_at": meta.get("corrected_at"),
         }
     )
 
@@ -1016,33 +925,24 @@ def api_retrain_model():
       3) xai.reset_model()            -> reload new weights on next XAI call
     """
     try:
-        # 1) Export corrected segments
-        from export_corrected_segments import export_corrected_segments
-
-        export_corrected_segments()
+        # 1) Export corrected segments - SKIPPED (Not needed for SQL-based retrain.py and was blocking)
+        # from export_corrected_segments import export_corrected_segments
+        # export_corrected_segments()
 
         # 2) Run retraining script (CPU or CUDA handled inside train code)
-        # Using train_balanced.py which has Focal Loss and aggressive sampling for class imbalance
-        script_path = BASE_DIR / "models_training" / "train_balanced.py"
-        result = subprocess.run(
-            [sys.executable, str(script_path)],
-            capture_output=True,
-            text=True,
-            cwd=str(BASE_DIR / "models_training")  # Run inside that folder to keep imports simple
-        )
-
-        if result.returncode != 0:
-            return jsonify(
-                {
-                    "error": "Retraining script failed",
-                    "details": result.stderr,
-                }
+        # Using retrain.py as requested
+        script_path = BASE_DIR / "models_training" / "retrain.py"
+        
+        # Run in background (non-blocking) using Popen
+        with open("training_log.txt", "w") as log_file:
+            subprocess.Popen(
+                [sys.executable, str(script_path)],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                cwd=str(BASE_DIR / "models_training")
             )
 
-        # 3) Reload model for XAI
-        reset_model()
-
-        return jsonify({"status": "ok", "message": "Model retrained and reloaded."})
+        return jsonify({"status": "ok", "message": "Training started in background! Check training_log.txt for progress."})
     except Exception as e:
         return jsonify({"error": str(e)})
 

@@ -241,3 +241,46 @@ def get_first_segment_id_by_filename(filename_key: str) -> int:
     finally:
         if conn:
             conn.close()
+
+# =====================================================================
+# GET ALL CORRECTED SEGMENTS (For Export)
+# =====================================================================
+def get_all_corrected() -> List[Dict[str, Any]]:
+    conn = None
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT segment_id,
+                   filename,
+                   segment_index,
+                   arrhythmia_label,
+                   model_pred_label,
+                   features_json,
+                   raw_signal,
+                   segment_fs,
+                   dataset_source
+            FROM ecg_features_annotatable
+            WHERE raw_signal IS NOT NULL
+              AND arrhythmia_label IS NOT NULL
+              AND arrhythmia_label != 'Unlabeled';
+        """)
+        
+        rows = cur.fetchall()
+        cols = [
+            "segment_id", "filename", "segment_index", "arrhythmia_label",
+            "model_pred_label", "features_json", "raw_signal", "segment_fs", "dataset_source"
+        ]
+        
+        results = []
+        for r in rows:
+            results.append({cols[i]: r[i] for i in range(len(cols))})
+            
+        return results
+
+    except Exception as e:
+        print("DB ERROR get_all_corrected:", e)
+        return []
+    finally:
+        if conn:
+            conn.close()

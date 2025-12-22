@@ -12,6 +12,7 @@ Loads ECG JSON dataset for training CNN+Transformer model.
 
 import json
 import numpy as np
+import psycopg2
 from pathlib import Path
 from scipy.signal import resample
 
@@ -56,6 +57,14 @@ CLASS_NAMES = [
     "1st Degree AV Block + PVC",     # 28
     "Sinus Bradycardia + PVC Bigeminy", # 29
     "Sinus Tachycardia + PVC Bigeminy", # 30
+    
+    # COMPLEX PATTERNS (Rules-Based / Advanced)
+    "Atrial Couplet",                # 31
+    "Atrial Run",                    # 32
+    "Ventricular Run",               # 33
+    "NSVT",                          # 34
+    "PSVT",                          # 35
+    "Pause",                         # 36
 ]
 
 CLASS_INDEX = {name: i for i, name in enumerate(CLASS_NAMES)}
@@ -286,3 +295,106 @@ class ECGDataset:
 
         meta = data.get("meta", {"source": str(fpath)})
         return {"signal": sig, "label": int(y), "meta": meta}
+
+
+# ============================================================
+# SQL DATASET
+# ============================================================
+
+class ECGRawDatasetSQL:
+    def __init__(self, limit=None):
+        self.conn_params = {
+            "dbname": "ecg_analysis",
+            "user": "ecg_user",
+            "password": "sais",
+            "host": "127.0.0.1",
+            "port": "5432"
+        }
+        self.samples = []  # [(segment_id, label_int), ...]
+        self._load_metadata(limit)
+
+    def _connect(self):
+        return psycopg2.connect(**self.conn_params)
+
+    def _load_metadata(self, limit):
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                query = """
+                    SELECT segment_id, arrhythmia_label
+                    FROM ecg_features_annotatable
+                    WHERE raw_signal IS NOT NULL
+                      AND arrhythmia_label IS NOT NULL
+                      AND arrhythmia_label != 'Unlabeled'
+                """
+                if limit:
+                    query += f" LIMIT {limit}"
+                cur.execute(query)
+                rows = cur.fetchall()
+
+                count = 0
+                for r in rows:
+                    seg_id, lbl_str = r
+                    # Validate label
+                    if not lbl_str: 
+                        continue
+                    
+                    # Normalize
+                    lbl_norm = normalize_label(lbl_str)
+                    lbl_idx = CLASS_INDEX.get(lbl_norm, 0)
+                    
+                    self.samples.append((seg_id, lbl_idx))
+                    count += 1
+                
+                print(f"[ECGRawDatasetSQL] Loaded {count} segments from DB.")
+        finally:
+            conn.close()
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        seg_id, label_idx = self.samples[idx]
+        
+        # Fetch signal
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT raw_signal, segment_fs FROM ecg_features_annotatable WHERE segment_id = %s", (seg_id,))
+                row = cur.fetchone()
+                if not row:
+                    # Should not happen if metadata is consistent
+                    return {"signal": np.zeros(SEG_LEN, dtype=np.float32), "label": label_idx, "meta": {"id": seg_id}}
+                
+                raw_sig, fs = row
+                # raw_sig is likely a list or array from PG
+                sig = np.array(raw_sig, dtype=np.float32)
+                
+                if fs is None: fs = TARGET_FS
+                fs = int(fs)
+                
+                # Resample / Fix Len using the existing logic
+                # We can reuse logic or implement here. 
+                # Since ECGRawDatasetSQL is separate, we'll duplicate the helper or make it static.
+                # Re-using the helper from ECGDataset class is hard unless we refactor.
+                # I'll implement a simple static version or inline it.
+                
+                # Inline resample/fixlen logic
+                if fs != TARGET_FS and len(sig) > 1:
+                    new_len = int(len(sig) * float(TARGET_FS) / float(fs))
+                    sig = resample(sig, new_len).astype(np.float32)
+                
+                if len(sig) < SEG_LEN:
+                    pad = SEG_LEN - len(sig)
+                    sig = np.pad(sig, (0, pad))
+                elif len(sig) > SEG_LEN:
+                    sig = sig[:SEG_LEN]
+                
+                return {
+                    "signal": sig, 
+                    "label": int(label_idx), 
+                    "meta": {"id": seg_id}
+                }
+        finally:
+            conn.close()
+

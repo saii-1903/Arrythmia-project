@@ -10,18 +10,34 @@ import numpy as np
 from torch.utils.data import DataLoader, random_split, WeightedRandomSampler
 from pathlib import Path
 from tqdm import tqdm
+import sys
+
+# Add project root to sys.path to allow imports from xai
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from data_loader import ECGRawDatasetSQL, CLASS_NAMES
 from models import CNNTransformerClassifier
-from xai import reset_model
-from utils import compute_metrics
+from xai.xai import reset_model
+from sklearn.metrics import f1_score, accuracy_score, confusion_matrix
 
 # -----------------------------------------------------
 # Checkpoints
 # -----------------------------------------------------
-CKPT_DIR = Path("outputs/checkpoints")
+# Ensure we save to models_training/outputs/checkpoints regardless of where script is run
+CKPT_DIR = Path(__file__).parent / "outputs" / "checkpoints"
 CKPT_DIR.mkdir(parents=True, exist_ok=True)
-CKPT_PATH = CKPT_DIR / "final.pt"
+CKPT_PATH = CKPT_DIR / "best_model.pth"
+
+
+# -----------------------------------------------------
+# Metrics
+# -----------------------------------------------------
+def compute_metrics(y_true, y_pred):
+    acc = float(accuracy_score(y_true, y_pred)) if len(y_true) > 0 else 0.0
+    macro_f1 = float(f1_score(y_true, y_pred, average='macro')) if len(y_true) > 0 else 0.0
+    # Use the dynamic CLASS_NAMES length
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(len(CLASS_NAMES))))
+    return {"accuracy": acc, "macro_f1": macro_f1, "confusion_matrix": cm.tolist()}
 
 
 # -----------------------------------------------------
@@ -97,18 +113,23 @@ def retrain_model():
     print("Using device:", device)
 
     # Load dataset
+    # Load dataset
     dataset = ECGRawDatasetSQL(limit=None)
     print(f"Loaded {len(dataset)} segments")
 
-    if len(dataset) < 100:
-        print("⛔ Not enough SQL data to train.")
+    if len(dataset) < 5:
+        print("⛔ Not enough SQL data to train. Need at least 5 segments.")
         return False
 
     # Extract labels
-    labels_all = [dataset[i]["label"] for i in range(len(dataset))]
+    # Optimization: If dataset has 'samples' (ECGRawDatasetSQL), use that to avoid DB fetch overhead
+    if hasattr(dataset, "samples"):
+        labels_all = [s[1] for s in dataset.samples]
+    else:
+        labels_all = [dataset[i]["label"] for i in range(len(dataset))]
 
-    # Convert label strings → class index
-    labels_all = [CLASS_NAMES.index(lbl) for lbl in labels_all]
+    # Labels are already indices (ints) from ECGRawDatasetSQL
+    # No need to map CLASS_NAMES.index(lbl)
     num_classes = len(CLASS_NAMES)
 
     # Class weights
