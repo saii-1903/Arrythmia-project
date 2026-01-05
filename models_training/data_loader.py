@@ -15,6 +15,9 @@ import numpy as np
 import psycopg2
 from pathlib import Path
 from scipy.signal import resample
+import sys
+# Ensure we can find the project root features (signal_processing)
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 # ============================================================
 # ============================================================
@@ -257,6 +260,11 @@ class ECGDataset:
 
         return sig.astype(np.float32)
 
+    def _clean_signal(self, sig, fs):
+        """Apply centralized filtering"""
+        from signal_processing.cleaning import clean_signal
+        return clean_signal(sig, fs)
+
     def __getitem__(self, idx):
         fpath = self.files[idx]
         data = self._safe_load_json(fpath)
@@ -278,7 +286,12 @@ class ECGDataset:
                 "meta": {"source": str(fpath)},
             }
 
+        # 1. Resample & Fix Length
         sig = self._resample_and_fixlen(sig, fs)
+        
+        # 2. Clean (Apply filtering AFTER resampling to match app.py logic roughly, or BEFORE?)
+        # Typically filters run on fixed fs. App.py resamples THEN filters. We will match that.
+        sig = self._clean_signal(sig, TARGET_FS)
 
         # LABEL resolution
         label_txt = None
@@ -310,18 +323,23 @@ class ECGRawDatasetSQL:
             "host": "127.0.0.1",
             "port": "5432"
         }
-        self.samples = []  # [(segment_id, label_int), ...]
-        self._load_metadata(limit)
+        self.samples = [] 
+        self.signal_cache = {}
+        
+        # Pre-load everything (Optimized)
+        self._load_all_data(limit)
 
     def _connect(self):
         return psycopg2.connect(**self.conn_params)
 
-    def _load_metadata(self, limit):
+    def _load_all_data(self, limit):
+        print("[ECGRawDatasetSQL] Connecting to DB (Optimized Pre-load)...")
         conn = self._connect()
         try:
             with conn.cursor() as cur:
+                # Optimized query
                 query = """
-                    SELECT segment_id, arrhythmia_label
+                    SELECT segment_id, arrhythmia_label, raw_signal
                     FROM ecg_features_annotatable
                     WHERE raw_signal IS NOT NULL
                       AND arrhythmia_label IS NOT NULL
@@ -329,24 +347,48 @@ class ECGRawDatasetSQL:
                 """
                 if limit:
                     query += f" LIMIT {limit}"
+                
+                print("Executing query...")
                 cur.execute(query)
                 rows = cur.fetchall()
+                print(f"Fetched {len(rows)} rows. Processing...")
 
                 count = 0
                 for r in rows:
-                    seg_id, lbl_str = r
-                    # Validate label
-                    if not lbl_str: 
-                        continue
+                    seg_id, lbl_str, raw_sig = r
                     
-                    # Normalize
+                    if not lbl_str: continue
                     lbl_norm = normalize_label(lbl_str)
-                    lbl_idx = CLASS_INDEX.get(lbl_norm, 0)
                     
-                    self.samples.append((seg_id, lbl_idx))
-                    count += 1
+                    if lbl_norm in CLASS_INDEX:
+                        lbl_idx = CLASS_INDEX[lbl_norm]
+                        self.samples.append((seg_id, lbl_idx))
+                        
+                        # Process signal
+                        sig = np.array(raw_sig, dtype=np.float32)
+                        
+                        # Pre-resample/fixlen to 2500
+                        # Assume stored as 250hz or close? 
+                        # We don't have fs in this query for speed, but `synthesize` saves as 250.
+                        # Real data might vary. 
+                        # For robustness, we should ideally check fs, but standardizing to 2500 len covers it.
+                        TARGET_LEN = 2500
+                        if len(sig) != TARGET_LEN and len(sig) > 0:
+                             idx_old = np.arange(len(sig))
+                             idx_new = np.linspace(0, len(sig) - 1, TARGET_LEN)
+                             sig = np.interp(idx_new, idx_old, sig).astype(np.float32)
+                        
+                        # CLEANING (Centralized)
+                        try:
+                            from signal_processing.cleaning import clean_signal
+                            sig = clean_signal(sig, 250)
+                        except ImportError:
+                            pass # Fallback if module not found (e.g. during standalone test)
+
+                        self.signal_cache[seg_id] = sig
+                        count += 1
                 
-                print(f"[ECGRawDatasetSQL] Loaded {count} segments from DB.")
+                print(f"[ECGRawDatasetSQL] Loaded {count} segments into RAM.")
         finally:
             conn.close()
 
@@ -356,45 +398,12 @@ class ECGRawDatasetSQL:
     def __getitem__(self, idx):
         seg_id, label_idx = self.samples[idx]
         
-        # Fetch signal
-        conn = self._connect()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT raw_signal, segment_fs FROM ecg_features_annotatable WHERE segment_id = %s", (seg_id,))
-                row = cur.fetchone()
-                if not row:
-                    # Should not happen if metadata is consistent
-                    return {"signal": np.zeros(SEG_LEN, dtype=np.float32), "label": label_idx, "meta": {"id": seg_id}}
-                
-                raw_sig, fs = row
-                # raw_sig is likely a list or array from PG
-                sig = np.array(raw_sig, dtype=np.float32)
-                
-                if fs is None: fs = TARGET_FS
-                fs = int(fs)
-                
-                # Resample / Fix Len using the existing logic
-                # We can reuse logic or implement here. 
-                # Since ECGRawDatasetSQL is separate, we'll duplicate the helper or make it static.
-                # Re-using the helper from ECGDataset class is hard unless we refactor.
-                # I'll implement a simple static version or inline it.
-                
-                # Inline resample/fixlen logic
-                if fs != TARGET_FS and len(sig) > 1:
-                    new_len = int(len(sig) * float(TARGET_FS) / float(fs))
-                    sig = resample(sig, new_len).astype(np.float32)
-                
-                if len(sig) < SEG_LEN:
-                    pad = SEG_LEN - len(sig)
-                    sig = np.pad(sig, (0, pad))
-                elif len(sig) > SEG_LEN:
-                    sig = sig[:SEG_LEN]
-                
-                return {
-                    "signal": sig, 
-                    "label": int(label_idx), 
-                    "meta": {"id": seg_id}
-                }
-        finally:
-            conn.close()
+        # RAM Fetch
+        sig = self.signal_cache.get(seg_id, np.zeros(2500, dtype=np.float32))
+        
+        return {
+            "signal": sig, 
+            "label": int(label_idx), 
+            "meta": {"id": seg_id}
+        }
 

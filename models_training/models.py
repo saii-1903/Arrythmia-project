@@ -41,6 +41,22 @@ class SmallCNN(nn.Module):
 
 
 class CNNTransformerClassifier(nn.Module):
+    """
+    FROZEN ARCHITECTURAL INTENT:
+    ---------------------------
+    This model combines a CNN feature extractor with a Transformer encoder.
+    
+    1. CNN (SmallCNN): Responsible for extracting local morphological features 
+       (e.g., QRS shape, P-wave presence) from raw waveform patches.
+       
+    2. Transformer (TransformerEncoder): Responsible for modeling long-range 
+       temporal dependencies across the sequence of features (e.g., rhythm regularity, 
+       pattern repetition like Bigeminy).
+       
+    This hybrid approach ensures both shape (Morphology) and rhythm (Time) are learned.
+    """
+    TARGET_LEN = 2500 # Explicitly defined input length
+    
     def __init__(self, num_classes=7, cnn_channels=[32, 64, 128],
                  nhead=8, num_layers=2, dim_feedforward=256):
         super().__init__()

@@ -1,0 +1,40 @@
+=== Evaluation on CORRECTED Segments (300 Recent) ===
+                          precision    recall  f1-score   support
+
+            Sinus Rhythm      0.000     0.000     0.000     104.0
+       Sinus Tachycardia      0.000     0.000     0.000      58.0
+     Atrial Fibrillation      0.000     0.000     0.000      43.0
+          Atrial Flutter      0.000     0.000     0.000      81.0
+Ventricular Fibrillation      0.000     0.000     0.000       0.0
+                     PAC      0.000     0.000     0.000       9.0
+            PAC Bigeminy      0.000     0.000     0.000       1.0
+                Artifact      0.000     0.000     0.000       0.0
+          Atrial Couplet      0.000     0.000     0.000       3.0
+              Atrial Run      0.000     0.000     0.000       1.0
+                    PSVT      0.000     0.000     0.000       0.0
+
+                accuracy                          0.000     300.0
+               macro avg      0.000     0.000     0.000     300.0
+            weighted avg      0.000     0.000     0.000     300.0
+
+
+Ground Truth Distribution:
+  Sinus Rhythm: 104
+  Atrial Flutter: 81
+  Sinus Tachycardia: 58
+  Atrial Fibrillation: 43
+  PAC: 9
+  Atrial Couplet: 3
+  Atrial Run: 1
+  PAC Bigeminy: 1
+
+Prediction Distribution:
+  PSVT: 170
+  Artifact: 89
+  Atrial Run: 31
+  Ventricular Fibrillation: 7
+  Atrial Couplet: 3
+
+Sinus Rhythm predictions: 0/300 (0.0%)
+
+Overall Accuracy on Corrections: 0.00%

@@ -289,7 +289,20 @@ class SyntheticECGGenerator:
 
         signal += np.random.normal(0, 0.02, self.length)
 
-        return signal, r_peaks
+        # Ground Truth Metadata for Validation
+        metadata = {
+            "expected_label": label,
+            "expected_bpm": bpm,
+            "expected_regularity": regularity,
+            "noise_level": noise_level,
+            "primary_label": primary_label,
+            "secondary_label": secondary_label,
+            "expected_r_peaks": r_peaks,
+            "duration_s": self.duration,
+            "fs": self.fs
+        }
+
+        return signal, r_peaks, metadata
 
 def save_to_db(generator, labels_to_gen):
     if psycopg2 is None:
@@ -305,7 +318,7 @@ def save_to_db(generator, labels_to_gen):
             if count == 0: continue
             print(f"Generating {count} of {label}...")
             for i in range(count):
-                signal, r_peaks = generator.generate_segment(label, num_events=2)
+                signal, r_peaks, metadata = generator.generate_segment(label, num_events=2)
                 
                 filename = f"syn_{label.replace(' ','_').replace('+','_')[:15]}_{uuid.uuid4().hex[:6]}"
                 
@@ -318,7 +331,7 @@ def save_to_db(generator, labels_to_gen):
                 """, (
                     filename, 0, 0.0, 10.0, label, 
                     signal.tolist(), json.dumps(r_peaks), 360, "Synthetic_Combos",
-                    json.dumps({"label": label})
+                    json.dumps(metadata) # Save full ground truth metadata here
                 ))
         
         conn.commit()

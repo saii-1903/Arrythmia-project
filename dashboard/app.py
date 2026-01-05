@@ -99,37 +99,22 @@ def _load_data_from_json(file_path: Path) -> Tuple[np.ndarray, int]:
     return signal, original_fs
 
 
+from signal_processing.cleaning import clean_signal
+
 def _preprocess(signal: np.ndarray, original_fs: int) -> np.ndarray:
     """
-    Resample to TARGET_FS and apply:
-      - High-pass (0.5 Hz)
-      - Low-pass (40 Hz)
-      - 50 Hz + 60 Hz notch
+    Standard preprocessing using signal_processing module.
+    1. Resample to Target Rate
+    2. Clean (Baseline Removal + Powerline Removal)
     """
+    # Resample first if needed
     if original_fs != TARGET_FS:
         signal = resample_poly(signal, TARGET_FS, original_fs).astype(np.float32)
     else:
         signal = signal.astype(np.float32)
-
-    nyq = 0.5 * TARGET_FS
-
-    # High-pass for baseline wander
-    b_hp, a_hp = butter(3, 0.5 / nyq, btype="high")
-    signal = filtfilt(b_hp, a_hp, signal)
-
-    # Low-pass for HF noise
-    b_lp, a_lp = butter(3, 40.0 / nyq, btype="low")
-    signal = filtfilt(b_lp, a_lp, signal)
-
-    # 50 Hz notch
-    b_50, a_50 = butter(2, [(50 - 1) / nyq, (50 + 1) / nyq], btype="bandstop")
-    signal = filtfilt(b_50, a_50, signal)
-
-    # 60 Hz notch
-    b_60, a_60 = butter(2, [(60 - 1) / nyq, (60 + 1) / nyq], btype="bandstop")
-    signal = filtfilt(b_60, a_60, signal)
-
-    return signal
+        
+    # Apply centralized cleaning
+    return clean_signal(signal, TARGET_FS)
 
 
 def _detect_r_peaks_neurokit(signal: np.ndarray, fs: int) -> np.ndarray:
@@ -613,7 +598,6 @@ def api_xai(segment_id: int):
       - uses xai.explain_segment(segment_1d, features) to:
           -> run model prediction
           -> return pred_label, probabilities, explanation
-      - also stores model_pred_label, model_pred_probs in SQL
     """
     seg = db_service.get_segment_data(segment_id)
     if not seg:
@@ -631,6 +615,14 @@ def api_xai(segment_id: int):
             return jsonify({"error": f"Failed to load ECG segment: {e}"}), 500
 
     segment_np = np.array(raw_signal, dtype=np.float32)
+    
+    # [FIX] Reject short segments
+    if len(segment_np) < 2000: # < 8 seconds
+        return jsonify({
+            "pred_label": "Artifact / Short",
+            "confidence": 0.0,
+            "explanation": "Signal is too short for reliable analysis (< 8s)."
+        })
 
     # 2) Features from SQL
     features = seg.get("features_json") or {}
@@ -651,15 +643,80 @@ def api_xai(segment_id: int):
     # Put PR in features for XAI rules
     features["pr_interval"] = float(pr_interval_ms)
 
+    # 4.5) ARTIFACT GATING (New)
+    from signal_processing.artifact_detection import check_signal_quality
+    
+    quality = check_signal_quality(segment_np, TARGET_FS)
+    if not quality["is_acceptable"]:
+        print(f"⚠️ Segment {segment_id} rejected due to artifacts: {quality['issues']}")
+        
+        # Return strict rejection response
+        pred_label = "Artifact / Noise"
+        # Dummy probs (1.0 for Artifact)
+        # Find index of "Artifact" if exists, else just 0s
+        probs = [0.0] * len(CLASS_NAMES)
+        if "Artifact" in CLASS_NAMES:
+            probs[CLASS_NAMES.index("Artifact")] = 1.0
+            
+        explanation = (
+            f"**Signal Rejected**: The signal quality is insufficient for reliable analysis.\n"
+            f"**Issues Detected**: {', '.join(quality['issues'])}.\n"
+            f"**Action**: Please verify electrode contact or check for patient movement."
+        )
+        saliency = []
+        
+        # Save rejection to DB
+        db_service.save_model_prediction(segment_id, pred_label, probs)
+        
+        return jsonify({
+            "pred_label": pred_label,
+            "probs": probs,
+            "explanation": explanation,
+            "saliency": saliency,
+            "classes": CLASS_NAMES,
+            "quality_issues": quality['issues']
+        })
+
     # 5) Run the model + explanation
     try:
         print(f"🔍 Calling explain_segment for segment {segment_id}...")
         xai_out = explain_segment(segment_np, features)
         print("✅ explain_segment success")
-        pred_label = xai_out.get("pred_label", "Unknown")
-        probs = xai_out.get("probabilities", None)
-        explanation = xai_out.get("explanation", "")
+        
+        # Extract ML Raw Output
+        ml_pred_label = xai_out.get("pred_label", "Unknown")
+        ml_probs = xai_out.get("probabilities", [])
+        ml_confidence = max(ml_probs) if ml_probs and len(ml_probs)>0 else 0.0
+        
+        # --- ORCHESTRATION LAYER (New) ---
+        from decision_engine.rhythm_orchestrator import RhythmOrchestrator
+        orchestrator = RhythmOrchestrator()
+        
+        decision = orchestrator.decide(
+            ml_prediction={
+                "label": ml_pred_label,
+                "probs": ml_probs,
+                "confidence": ml_confidence
+            },
+            clinical_features=features,
+            sqi_result=quality  # From step 4.5
+        )
+        
+        # Override with decision
+        pred_label = decision["final_label"]
+        probs = decision["probabilities"]
+        
+        # Merge Explanations (Orchestrator Reason + XAI Detail)
+        xai_expl = xai_out.get("explanation", "")
+        orch_expl = decision.get("explanation", "")
+        
+        if decision["source"] != "ML_Model":
+            explanation = f"**Decision: {pred_label}**\n*Reason*: {orch_expl}\n\n(Model originally thought: {ml_pred_label})"
+        else:
+            explanation = xai_expl
+
         saliency = xai_out.get("saliency", [])
+        
     except Exception as e:
         # Model unavailable or incompatible - provide placeholder
         import traceback

@@ -1,0 +1,17 @@
+
+=== RETRAINING FROM SQL DATA ===
+Using device: cpu
+[ECGRawDatasetSQL] Loaded 43907 segments from DB.
+Loaded 43907 segments
+
+Epoch 1/15
+Train:   0%|          | 0/2333 [00:00<?, ?it/s]Train:   0%|          | 1/2333 [00:02<1:24:56,  2.19s/it]Train:   0%|          | 2/2333 [00:04<1:20:05,  2.06s/it]Train:   0%|          | 3/2333 [00:06<1:17:30,  2.00s/it]Train:   0%|          | 4/2333 [00:07<1:14:38,  1.92s/it]Train:   0%|          | 5/2333 [00:10<1:19:32,  2.05s/it]Train:   0%|          | 6/2333 [00:12<1:20:18,  2.07s/it]Train:   0%|          | 7/2333 [00:14<1:19:49,  2.06s/it]Train:   0%|          | 8/2333 [00:16<1:18:37,  2.03s/it]Train:   0%|          | 9/2333 [00:18<1:18:33,  2.03s/it]forrtl: error (200): program aborting due to window-CLOSE event
+Image              PC                Routine            Line        Source             
+KERNELBASE.dll     00007FF88D53B99D  Unknown               Unknown  Unknown
+KERNEL32.DLL       00007FF88EF0E8D7  Unknown               Unknown  Unknown
+ntdll.dll          00007FF8900CC53C  Unknown               Unknown  Unknown
+6/2333 [00:33<1:18:58,  2.05s/it]Train:   1%|          | 17/2333 [00:35<1:19:20,  2.06s/it]Train:   1%|          | 18/2333 [00:37<1:21:05,  2.10s/it]Train:   1%|          | 19/2333 [00:39<1:17:37,  2.01s/it]Train:   1%|          | 20/2333 [00:41<1:21:29,  2.11s/it]forrtl: error (200): program aborting due to window-CLOSE event
+Image              PC                Routine            Line        Source             
+KERNELBASE.dll     00007FF88D53B99D  Unknown               Unknown  Unknown
+KERNEL32.DLL       00007FF88EF0E8D7  Unknown               Unknown  Unknown
+ntdll.dll          00007FF8900CC53C  Unknown               Unknown  Unknown

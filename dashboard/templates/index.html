@@ -628,7 +628,7 @@
             "Ventricular Tachycardia", "Ventricular Fibrillation", "1st Degree AV Block",
             "2nd Degree AV Block Type 1", "2nd Degree AV Block Type 2", "3rd Degree AV Block",
             "PVCs", "PVC Bigeminy", "PVC Trigeminy", "PVC Couplet",
-            "PAC", "PAC Bigeminy", "Bundle Branch Block", "Artifact",
+            "PAC", "PAC Bigeminy", "PAC Trigeminy", "Bundle Branch Block", "Artifact",
             "Sinus Bradycardia + PVC", "Sinus Tachycardia + PVC", "Sinus Bradycardia + PAC",
             "Sinus Tachycardia + PAC", "Atrial Fibrillation + PVC", "Atrial Flutter + PVC",
             "1st Degree AV Block + PVC", "Sinus Bradycardia + PVC Bigeminy", "Sinus Tachycardia + PVC Bigeminy",
@@ -732,6 +732,20 @@
             document.getElementById("arrLabel").innerText = data.pred_label || "Unknown";
             document.getElementById("xaiText").innerText = data.explanation || "";
             saliencyData = data.saliency || [];
+
+            // --- AUTO-FILL ANNOTATION IF EMPTY ---
+            // If the segment is NOT already annotated (badge hidden), default the dropdown to the AI's suggestion.
+            const badge = document.getElementById("annotationBadge");
+            const isAnnotated = (badge.style.display !== "none");
+
+            if (!isAnnotated && data.pred_label) {
+                const sel = document.getElementById("annoLabel");
+                // Ensure the value exists in the dropdown before selecting
+                let options = Array.from(sel.options).map(o => o.value);
+                if (options.includes(data.pred_label)) {
+                    sel.value = data.pred_label;
+                }
+            }
 
             redrawECG();
             if (data.classes && data.probs) {

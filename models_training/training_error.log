@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "C:\Users\Lifesigns_LS\Documents\porject\arrythmia project\models_training\train_balanced.py", line 474, in <module>
+    main()
+  File "C:\Users\Lifesigns_LS\Documents\porject\arrythmia project\models_training\train_balanced.py", line 265, in main
+    full_dataset = ECGRawDatasetSQL(sql_limit=None, augment=False)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Lifesigns_LS\Documents\porject\arrythmia project\models_training\train_balanced.py", line 83, in __init__
+    cur.execute(query)
+psycopg2.errors.UndefinedColumn: column "patient_id" does not exist
+LINE 2: ... SELECT segment_id, arrhythmia_label, raw_signal, patient_id...
+                                                             ^
+

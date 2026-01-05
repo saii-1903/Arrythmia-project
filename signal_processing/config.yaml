@@ -1,0 +1,21 @@
+
+baseline:
+  method: "butterworth_highpass"
+  cutoff: 0.5
+  order: 3
+  
+powerline:
+  method: "notch"
+  frequencies: [50, 60]
+  quality_factor: 30
+  
+sampling:
+  target_fs: 250
+
+artifacts:
+  # Threshold below which signal is considered flatline (std dev)
+  flatline_threshold: 0.001 
+  # Max allowed amplitude jump between consecutive samples (roughly mV)
+  max_step_change: 4.0
+  # Noise check: High frequency noise threshold (approx)
+  high_freq_noise_threshold: 100.0

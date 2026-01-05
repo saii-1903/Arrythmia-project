@@ -201,14 +201,18 @@ def _apply_clinical_rules(features: dict) -> tuple:
     else:
         rr_arr = np.array([])
     
-    # QRS durations
-    raw_qrs = features.get("qrs_durations_ms")
-    if isinstance(raw_qrs, list):
-        qrs_list = [x for x in raw_qrs if x is not None and isinstance(x, (int, float))]
-    else:
-        qrs_list = []
-    
-    qrs_mean = float(sum(qrs_list) / len(qrs_list)) if len(qrs_list) > 0 else 0.0
+    # Robust QRS mean
+    qrs_mean = 0.0
+    qrs_list = []
+    try:
+        raw_qrs = features.get("qrs_durations_ms")
+        if isinstance(raw_qrs, list):
+            q_list = [x for x in raw_qrs if isinstance(x, (int, float))]
+            if q_list: 
+                qrs_mean = float(sum(q_list) / len(q_list))
+                qrs_list = q_list
+    except Exception:
+        pass
     
     # HRV features
     sdnn = float(features.get("SDNN", 0.0))
@@ -587,6 +591,31 @@ def _apply_clinical_rules(features: dict) -> tuple:
             else:
                 return ("Ventricular Run", "HIGH", f"Ventricular Run: {max_w_run} consecutive wide-complex beats")
 
+    # ============================================================
+    # RULE 5C: PAC Trigeminy
+    # ============================================================
+    # Pattern: Normal, Normal, PAC (Short RR) -> Repeated
+    if len(rr_arr) >= 6 and qrs_mean < 120:
+        median_rr = np.median(rr_arr)
+        pac_trigeminy_matches = 0
+        # Check for sequence: [Normal, Normal, Short] in RR intervals
+        # Iterate up to len-2
+        for i in range(len(rr_arr) - 2):
+            rr1 = rr_arr[i]
+            rr2 = rr_arr[i+1]
+            rr3 = rr_arr[i+2]
+            
+            # Normal is relative to median (approx > 0.85)
+            # Short is premature (< 0.8)
+            if (rr1 > 0.85 * median_rr and 
+                rr2 > 0.85 * median_rr and 
+                rr3 < 0.8 * median_rr):
+                pac_trigeminy_matches += 1
+        
+        if pac_trigeminy_matches >= 2:
+             return ("PAC Trigeminy", "HIGH", 
+                     f"PAC Trigeminy Pattern: {pac_trigeminy_matches} cycles of N-N-PAC detected.")
+
         # ATRIAL RUN / COUPLET
         # Logic: 2 or more consecutive PACs.
         # PAC = Narrow QRS + Premature. 
@@ -610,21 +639,18 @@ def _apply_clinical_rules(features: dict) -> tuple:
 
 def _clinical_explanation(label: str, features: dict, attention_context: str = "") -> str:
     """
-    Returns a text explanation focusing on the 'intricate details' of the detection.
-    Strictly descriptive: explains WHY the arrhythmia was detected based on features.
-    
-    Args:
-        label: The predicted class
-        features: Dictionary of ECG features (HR, PR, etc.)
-        attention_context: String describing where the model looked (from transformer attention)
+    Returns a textual explanation that is contextual, detailed, and 'clever'.
+    It synthesizes quantitative data (features) with clinical logic.
     """
 
     if not label:
-        return "No arrhythmia detected in this segment."
+        return "Analysis: No specific arrhythmia detected. The signal appears to be within normal limits."
 
     text = label.lower()
     
-    # Safely get HR and PR, handling None
+    # -------------------------------------------------------------
+    # 1. EXTRACT AND VALIDATE DATA
+    # -------------------------------------------------------------
     hr_val = features.get("mean_hr")
     hr = float(hr_val) if hr_val is not None else 0.0
     
@@ -633,263 +659,204 @@ def _clinical_explanation(label: str, features: dict, attention_context: str = "
     
     rr_intervals = features.get("rr_intervals_ms", [])
     if isinstance(rr_intervals, list) and len(rr_intervals) > 0:
-        rr_std = np.std(rr_intervals)
-        rr_mean = np.mean(rr_intervals)
-        cv = rr_std / rr_mean if rr_mean > 0 else 0.0
+        cv = np.std(rr_intervals) / np.mean(rr_intervals)
+        rmssd = float(features.get("RMSSD", 0))
     else:
         cv = 0.0
+        rmssd = 0.0
 
-    # Safely calculate QRS mean
+    # Robust QRS mean
     qrs_mean = 0.0
     try:
         raw_qrs = features.get("qrs_durations_ms")
         if isinstance(raw_qrs, list):
-            qrs_list = [x for x in raw_qrs if x is not None and isinstance(x, (int, float))]
-        elif isinstance(raw_qrs, str):
-            try:
-                import json
-                qrs_list = json.loads(raw_qrs)
-                qrs_list = [x for x in qrs_list if x is not None and isinstance(x, (int, float))]
-            except:
-                qrs_list = []
-        else:
-            qrs_list = []
-            
-        if len(qrs_list) > 0:
-            qrs_mean = float(sum(qrs_list) / len(qrs_list))
-    except Exception as e:
-        print(f"⚠️  Error parsing QRS durations: {e}")
-        qrs_list = []
+            q_list = [x for x in raw_qrs if isinstance(x, (int, float))]
+            if q_list:
+                qrs_mean = float(sum(q_list) / len(q_list))
+    except Exception:
+        pass
 
-    # Helper to construct the 'Intricate Details' string
-    details = []
+    # -------------------------------------------------------------
+    # 2. GENERATE INTELLIGENT CONTEXT
+    # -------------------------------------------------------------
     
-    # Analyze Rhythm Regularity
-    if cv < 0.08:
-        rhythm_str = "Regular rhythm"
-    elif cv < 0.15:
-        rhythm_str = "Mildly irregular rhythm"
-    else:
-        rhythm_str = "Irregular rhythm"
+    # Rate descriptors
+    if hr < 40: rate_desc = "profoundly bradycardic"
+    elif hr < 60: rate_desc = "bradycardic"
+    elif hr < 100: rate_desc = "normal range"
+    elif hr < 150: rate_desc = "tachycardic"
+    else: rate_desc = "severely tachycardic"
     
-    details.append(f"Rhythm Analysis: {rhythm_str} (Coefficient of Variation={cv:.3f})")
+    # Rhythm descriptors
+    if cv < 0.08: rhythm_desc = "regular"
+    elif cv < 0.15: rhythm_desc = "mildly irregular"
+    else: rhythm_desc = "irregular"
     
-    # Analyze Heart Rate
-    if hr > 100:
-        hr_str = f"Tachycardic (HR={hr:.0f} bpm)"
-    elif hr < 60:
-        hr_str = f"Bradycardic (HR={hr:.0f} bpm)"
-    else:
-        hr_str = f"Normal rate (HR={hr:.0f} bpm)"
-    details.append(f"Heart Rate: {hr_str}")
+    # Conduction descriptors
+    cond_parts = []
+    if pr > 200: cond_parts.append(f"AV delay (PR {pr:.0f}ms)")
+    elif pr < 120 and pr > 10: cond_parts.append("rapid AV conduction")
+    
+    if qrs_mean > 120: cond_parts.append(f"wide QRS ({qrs_mean:.0f}ms)")
+    else: cond_parts.append(f"normal QRS ({qrs_mean:.0f}ms)")
+    
+    cond_str = ", ".join(cond_parts) if cond_parts else "normal conduction"
 
-    # Analyze Intervals
-    pr_str = f"PR Interval={pr:.0f}ms" + (" (Prolonged)" if pr > 200 else "")
-    qrs_str = f"QRS Duration={qrs_mean:.0f}ms" + (" (Wide)" if qrs_mean > 120 else " (Normal)")
-    details.append(f"Conduction: {pr_str}, {qrs_str}")
-
-    # Append the attention context to all returns if meaningful
-    
+    # Helper function to add attention context
     def enhance(base_text):
-        if attention_context: 
-             return f"{base_text}\n\nModel Context: {attention_context}"
+        if attention_context:
+            return f"{base_text}\n\n**Model Focus**: {attention_context}"
         return base_text
 
-    # --- SPECIFIC ARRHYTHMIA EXPLANATIONS ---
-
+    # -------------------------------------------------------------
+    # 3. ARRHYTHMIA-SPECIFIC NARRATIVES
+    # -------------------------------------------------------------
+    
+    intro = f"**Clinical Context**: The rhythm is {rate_desc} ({hr:.0f} bpm) and {rhythm_desc}, with {cond_str}."
+    
     # Atrial Fibrillation
-    if "atrial fibrillation" in text or "afib" in text:
-        return enhance(
-            f"Analysis: The ECG exhibits **Atrial Fibrillation**, characterized by a **{rhythm_str}** "
-            f"(Diff={cv:.3f}). The absence of consistent P-waves combined with an irregular ventricular response "
-            f"confirms the diagnosis.\n"
-            f"Key metrics: HR={hr:.0f} bpm, RMSSD={features.get('RMSSD',0):.0f}ms."
-        )
-
-    # Supraventricular Tachycardia
-    if "supraventricular tachycardia" in text or "svt" in text:
-        return enhance(
-            f"Analysis: **Supraventricular Tachycardia (SVT)** detected. The heart rate is significantly elevated "
-            f"at **{hr:.0f} bpm**, originating above the ventricles as indicated by the narrow QRS complexes "
-            f"({qrs_mean:.0f} ms). The rhythm is regular, suggesting a stable re-entrant mechanism."
-        )
-
-    # --- ECTOPIC BEATS & PATTERNS ---
+    if "fibrillation" in text and "atrial" in text:
+        analysis = (f"**Analysis**: **Atrial Fibrillation** is characterized by:\n"
+                   f"1. Chaotic irregularity (CV={cv:.2f}, RMSSD={rmssd:.0f}ms)\n"
+                   f"2. Absent organized P-waves (replaced by f-waves)\n"
+                   f"This combination confirms the diagnosis despite the {rate_desc} ventricular response.")
+        return enhance(f"{intro}\n\n{analysis}")
     
-    if "bigeminy" in text:
-        return enhance(
-            f"Analysis: **Ventricular Bigeminy** identified. Using waveform morphology, the model detected an alternating "
-            f"pattern of normal sinus beats and **Premature Ventricular Contractions (PVCs)**. "
-            f"The wide QRS complexes (>120ms) in every other beat create a distinct high-frequency modulation in the rhythm."
-        )
+    # Atrial Flutter
+    if "flutter" in text:
+        analysis = (f"**Analysis**: **Atrial Flutter** exhibits characteristic 'sawtooth' F-waves at ~300 bpm "
+                   f"with structured AV conduction (typically 2:1 or 4:1 block).")
+        return enhance(f"{intro}\n\n{analysis}")
     
-    if "trigeminy" in text:
-        return enhance(
-            f"Analysis: **Ventricular Trigeminy**. The trace shows a repeating triplet pattern: two normal beats "
-            f"followed by one wide-complex ectopic beat. This suggests a stable focus of ventricular irritability."
-        )
+    # 3rd Degree AV Block
+    if "3rd degree" in text or "complete" in text:
+        analysis = (f"**Analysis**: **Complete (3rd Degree) AV Block** - CRITICAL finding.\n"
+                   f"Complete AV dissociation is present. The ventricles beat independently at {hr:.0f} bpm "
+                   f"(escape rhythm), unrelated to atrial activity. The regularity (CV={cv:.2f}) confirms "
+                   f"the independent ventricular pacemaker.")
+        return enhance(f"{intro}\n\n{analysis}")
     
-    if "quadrigeminy" in text: # Corrected from 'quadrigeminy'
-         return enhance(
-            f"Analysis: **Ventricular Quadrigeminy**. A regular pattern where every fourth beat is a PVC. "
-            f"The underlying rhythm remains otherwise stable."
-        )
-    
-    if "couplet" in text or "pair" in text:
-        return enhance(
-            f"Analysis: **PVC Couplet** detected. Two consecutive premature ventricular complexes were isolated. "
-            f"This indicates a moment of heightened electrical instability compared to single PVCs."
-        )
-    
-    if "triplet" in text or "vt warning" in text or "run" in text:
-        return enhance(
-             f"Analysis: **Run of PVCs (Triplet)**. A burst of three consecutive ventricular beats was found. "
-             f"This is clinically significant as a potential precursor to Ventricular Tachycardia."
-        )
-    
-    # PACs (Single)
-    if "pac" in text and not ("pair" in text or "run" in text):
-         return enhance(
-             f"Analysis: **Premature Atrial Contraction (PAC)**. A beat occurred earlier than the expected sinus cycle. "
-             f"Unlike PVCs, the QRS remains narrow ({qrs_mean:.0f}ms), confirming atrial origin, though P-wave morphology may be distorted."
-         )
-
-    # General PVCs
-    if "pvc" in text and not ("bigeminy" in text or "trigeminy" in text):
-        return enhance(
-            f"Analysis: **Premature Ventricular Contractions**. The model identified ectopic beats with "
-            f"wide QRS morphology ({qrs_mean:.0f}ms) arriving early in the cardiac cycle. "
-            f"Background rhythm appears {rhythm_str.lower()}."
-        )
-
-    # --- ADVANCED RHYTHMS ---
-
-    if "junctional" in text:
-        return enhance(
-            f"Analysis: **Junctional Rhythm**. The electrical pacemaker has shifted to the AV node. "
-            f"Evidence: Normal/Narrow QRS complexes with absent or retrograde P-waves, usually at a slower rate ({hr:.0f} bpm)."
-        )
-
-    if "idioventricular" in text:
-        return enhance(
-            f"Analysis: **Idioventricular Rhythm**. Technical checks show a very slow ventricular escape rate ({hr:.0f} bpm) "
-            f"with wide, bizarre QRS complexes. This is a critical rhythm often seen when supraventricular pacemakers fail."
-        )
-    
-    if "ventricular fibrillation" in text:
-        return enhance(
-            f"CRITICAL: **Ventricular Fibrillation**. The signal is chaotic and disorganized with no discernible QRS complexes. "
-            f"Mechanical cardiac output is likely compromised."
-        )
-
-    if "atrial flutter" in text:
-        return enhance(
-            f"Analysis: **Atrial Flutter**. The model detected characteristic 'sawtooth' F-waves, likely at a rate near 300 bpm, "
-            f"with a structured ventricular response (e.g., 2:1 or 4:1 block)."
-        )
-
-    # Blocks
+    # 2nd Degree AV Block Type 1 (Wenckebach)
     if "wenckebach" in text or "type 1" in text:
-        return enhance(
-            f"Analysis: **2nd Degree AV Block Type I (Wenckebach)**. The rhythm exhibits progressive PR interval prolongation "
-            f"culminating in a dropped beat. This grouping pattern (e.g., 4:3 or 3:2 conduction) is characteristic of AV nodal delay."
-        )
-        
-    if "mobitz ii" in text or "type 2" in text:
-        return enhance(
-            f"Analysis: **2nd Degree AV Block Type II (Mobitz II)**. Intermittent non-conducted P-waves were detected without "
-            f"prior PR interval lengthening. This suggests an unpredictable block in the His-Purkinje system, carrying a higher risk of progression to complete heart block."
-        )
-
-    if "3rd degree" in text or "complete" in text or "3avb" in text:
-        return enhance(
-            f"Analysis: **3rd Degree (Complete) AV Block**. There is complete AV dissociation. The atrial rate (P-waves) and ventricular "
-            f"rate (QRS) are independent. The ventricles are beating at a slow escape rate ({hr:.0f} bpm) unrelated to the P-waves."
-        )
+        analysis = (f"**Analysis**: **2nd Degree AV Block Type I (Wenckebach)**.\n"
+                   f"Progressive PR prolongation culminates in a dropped QRS. This 'grouped beating' pattern "
+                   f"indicates AV nodal fatigability rather than structural damage.")
+        return enhance(f"{intro}\n\n{analysis}")
     
-    if "bundle branch" in text:
-        return enhance(
-            f"Analysis: **Bundle Branch Block**. Conduction delay is evident via widened QRS complexes ({qrs_mean:.0f}ms). "
-            f"The rhythm is otherwise supraventricular, differentiating this from ventricular ectopy."
-        )
-    
-    # --- NEW RULES EXPLANATIONS ---
-    
-    if "atrial couplet" in text:
-        return enhance(
-            f"Analysis: **Atrial Couplet**. Two consecutive Premature Atrial Contractions (PACs) were detected. "
-            f"These are narrow-complex beats ({qrs_mean:.0f} ms) occurring earlier than the expected sinus rhythm."
-        )
-
-    if "atrial run" in text:
-        return enhance(
-            f"Analysis: **Atrial Run** detected. A burst of 3 or more consecutive PACs. "
-            f"This represents a short episode of atrial tachycardia."
-        )
-
-    if "ventricular run" in text or "salvo" in text:
-        return enhance(
-            f"Analysis: **Ventricular Run (Salvo)**. A short burst of 3 or more consecutive wide-complex beats "
-            f"(>120ms) originating from the ventricles. This indicates significant ventricular irritability."
-        )
-
-    if "nsvt" in text:
-        return enhance(
-            f"Analysis: **Non-Sustained Ventricular Tachycardia (NSVT)**. A run of 3+ consecutive PVCs at a "
-            f"tachycardic rate (>100 bpm), lasting less than 30 seconds. This is a clinically significant finding warranting monitoring."
-        )
-
-    if "psvt" in text:
-        return enhance(
-            f"Analysis: **Paroxysmal Supraventricular Tachycardia (PSVT)**. The rhythm is regular, narrow-complex "
-            f"(QRS < 120ms), and rapid (HR={hr:.0f} bpm). The sudden onset implies a re-entrant mechanism above the ventricles."
-        )
-    
-    if "pause" in text:
-         return enhance(
-            f"Analysis: **Significant Pause**. A prolonged interval between beats (>2.0s) was detected. "
-            f"This could result from sinus arrest, exit block, or a non-conducted atrial beat."
-        )
-
-    # Sinus Tachycardia (Explicit Class)
-    if "sinus tachycardia" in text:
-         return enhance(
-            f"Analysis: **Sinus Tachycardia**. The heart is in a normal sinus rhythm but beating rapidly ({hr:.0f} bpm). "
-            f"All intervals and morphologies are effectively normal, just accelerated."
-         )
-
-    # Sinus Bradycardia (Explicit Class)
-    if "sinus bradycardia" in text:
-         return enhance(
-            f"Analysis: **Sinus Bradycardia**. The rate is slow ({hr:.0f} bpm) but originates correctly from the sinus node "
-            f"with normal conduction intervals."
-         )
+    # 2nd Degree AV Block Type 2 (Mobitz II)
+    if "mobitz" in text or "type 2" in text:
+        analysis = (f"**Analysis**: **2nd Degree AV Block Type II (Mobitz II)** - HIGH RISK.\n"
+                   f"Intermittent dropped beats occur WITHOUT prior PR prolongation. "
+                   f"The wide QRS ({qrs_mean:.0f}ms) localizes this to the His-Purkinje system. "
+                   f"Risk of progression to complete heart block.")
+        return enhance(f"{intro}\n\n{analysis}")
     
     # 1st Degree AV Block
-    if "av block" in text:
-         return enhance(
-             f"Analysis: **1st Degree AV Block**. Conduction from atria to ventricles is consistently delayed. "
-             f"The PR interval is measured at {pr:.0f}ms (Normal limit: 200ms)."
-         )
+    if "1st degree" in text:
+        analysis = (f"**Analysis**: **1st Degree AV Block**.\n"
+                   f"All atrial impulses conduct to ventricles, but with delay. PR interval is {pr:.0f}ms "
+                   f"(normal <200ms). The rhythm remains {rhythm_desc}, making this typically benign.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # PSVT/SVT
+    if "psvt" in text or ("svt" in text and "nsvt" not in text):
+        analysis = (f"**Analysis**: **Paroxysmal Supraventricular Tachycardia**.\n"
+                   f"Rapid ({hr:.0f} bpm), regular tachycardia with narrow QRS ({qrs_mean:.0f}ms) confirms "
+                   f"supraventricular origin. Sudden onset suggests re-entrant mechanism (AVNRT or AVRT).")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # NSVT
+    if "nsvt" in text:
+        analysis = (f"**Analysis**: **Non-Sustained Ventricular Tachycardia** - SIGNIFICANT finding.\n"
+                   f"A run of ≥3 consecutive wide-complex beats at tachycardic rate. "
+                   f"Indicates ventricular irritability and warrants monitoring.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # Sinus Tachycardia
+    if "sinus tachycardia" in text:
+        analysis = (f"**Analysis**: **Sinus Tachycardia**.\n"
+                   f"Physiological acceleration of the sinus node. P-waves are normal, PR intact. "
+                   f"Typically a response to stress, exercise, fever, or hypovolemia rather than primary arrhythmia.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # Sinus Bradycardia
+    if "sinus bradycardia" in text or "bradycardia" in text:
+        analysis = (f"**Analysis**: **Sinus Bradycardia**.\n"
+                   f"Slow but organized sinus rhythm. All conduction intervals normal. "
+                   f"May be physiological (athletes, sleep) or pathological (medications, sick sinus).")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # PVC Bigeminy
+    if "bigeminy" in text:
+        analysis = (f"**Analysis**: **Ventricular Bigeminy**.\n"
+                   f"Alternating pattern: Normal beat → PVC → Normal beat → PVC. "
+                   f"Wide QRS complexes (>120ms) in every other beat create characteristic coupling.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # PVC Trigeminy
+    if "trigeminy" in text:
+        analysis = (f"**Analysis**: **Ventricular Trigeminy**.\n"
+                   f"Pattern: Normal → Normal → PVC (repeating). "
+                   f"Indicates stable ventricular ectopic focus with 3:1 coupling.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # PVCs (general)
+    if "pvc" in text and "bigeminy" not in text and "trigeminy" not in text:
+        analysis = (f"**Analysis**: **Premature Ventricular Contractions**.\n"
+                   f"Ectopic beats with wide QRS ({qrs_mean:.0f}ms) arising from ventricular focus. "
+                   f"Arrive early in the cardiac cycle, often followed by compensatory pause.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # PAC Trigeminy
+    if "pac trigeminy" in text:
+        analysis = (f"**Analysis**: **PAC Trigeminy**.\n"
+                   f"Rhythm Pattern: Normal → Normal → PAC. "
+                   f"Every third beat acts as a premature atrial stimulus. Common in high adrenergic states.")
+        return enhance(f"{intro}\n\n{analysis}")
 
-    # Sinus Rhythm (Normal) - check for hidden conditions
+    # PACs (general)
+        analysis = (f"**Analysis**: **Premature Atrial Contractions**.\n"
+                   f"Early beats originating from atrial ectopic focus. QRS remains narrow ({qrs_mean:.0f}ms), "
+                   f"but P-wave morphology may be abnormal.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # Pause
+    if "pause" in text:
+        analysis = (f"**Analysis**: **Significant Sinus Pause**.\n"
+                   f"Prolonged interval (>2.0s) between beats detected. "
+                   f"May indicate sinus arrest, exit block, or non-conducted PAC.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # Ventricular Fibrillation
+    if "ventricular fibrillation" in text:
+        analysis = (f"**CRITICAL**: **Ventricular Fibrillation**.\n"
+                   f"Chaotic, disorganized electrical activity with no discernible QRS complexes. "
+                   f"Cardiac output is absent - IMMEDIATE defibrillation required.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # Bundle Branch Blocks
+    if "bundle branch" in text:
+        analysis = (f"**Analysis**: **Bundle Branch Block**.\n"
+                   f"Intraventricular conduction delay evident by wide QRS ({qrs_mean:.0f}ms). "
+                   f"Rhythm is supraventricular, differentiating from ventricular ectopy.")
+        return enhance(f"{intro}\n\n{analysis}")
+    
+    # Sinus Rhythm (Normal)
     if "sinus rhythm" in text:
-        base = f"Analysis: **Normal Sinus Rhythm**. The waveform is within physiological norms. " \
-               f"HR: {hr:.0f} bpm, PR: {pr:.0f}ms, QRS: {qrs_mean:.0f}ms."
-               
+        base = f"**Analysis**: **Normal Sinus Rhythm**.\nPhysiological rhythm with normal intervals."
         if hr > 100:
-             base += f"\nNote: However, the rate is elevated, technically meeting criteria for Tachycardia."
+            base += f"\n*Note: Rate is elevated ({hr:.0f} bpm) - consider sinus tachycardia.*"
         if hr < 50:
-             base += f"\nNote: However, the rate is low, technically meeting criteria for Bradycardia."
+            base += f"\n*Note: Rate is low ({hr:.0f} bpm) - consider sinus bradycardia.*"
         if pr > 200:
-             base += f"\nNote: A prolonged PR interval suggests an underlying 1st Degree AV Block."
-             
-        return enhance(base)
-
-    return enhance(
-        f"Model Prediction: **{label}**.\n"
-        f"Technical Summary: {technical_summary}."
-    )
+            base += f"\n*Note: PR prolonged ({pr:.0f}ms) - suggests 1st degree AV block.*"
+        return enhance(f"{intro}\n\n{base}")
+    
+    # Generic fallback
+    analysis = (f"**Analysis**: **{label}** detected.\n"
+               f"Based on rhythm analysis (CV={cv:.2f}), rate ({hr:.0f} bpm), "
+               f"and morphology (QRS {qrs_mean:.0f}ms).")
+    return enhance(f"{intro}\n\n{analysis}")
 
 
 # ---------------------------------------------------------------------
