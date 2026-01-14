@@ -1,0 +1,190 @@
+======================================================================
+TRAINING SESSION STARTED: 2026-01-05 12:46:20
+Log file: outputs\logs\training_20260105_124620.log
+======================================================================
+
+Using device: cuda
+
+======================================================================
+LOADING DATASET (no augmentation yet)
+======================================================================
+Connecting to DB (Pre-loading optimized)...
+⚠️  patient_id column NOT found - will use record-level split (DATA LEAKAGE POSSIBLE)
+Executing query...
+Fetched 43907 rows. Processing...
+[SQL DATASET] Indexed 43907 segments. RAM Cache Ready.
+[SQL DATASET] All signals pre-loaded. NO SQL connections in __getitem__.
+
+======================================================================
+CLASS DISTRIBUTION
+======================================================================
+00 Sinus Rhythm                   -> 39049
+01 Sinus Bradycardia              -> 5
+02 Sinus Tachycardia              -> 1158
+03 Supraventricular Tachycardia   -> 479
+04 Atrial Fibrillation            -> 362
+05 Atrial Flutter                 -> 361
+06 Junctional Rhythm              -> 5
+07 Idioventricular Rhythm         -> 95
+08 Ventricular Tachycardia        -> 95
+09 Ventricular Fibrillation       -> 95
+10 1st Degree AV Block            -> 0
+11 2nd Degree AV Block Type 1     -> 95
+12 2nd Degree AV Block Type 2     -> 95
+13 3rd Degree AV Block            -> 0
+14 PVCs                           -> 195
+15 PVC Bigeminy                   -> 135
+16 PVC Trigeminy                  -> 135
+17 PVC Couplet                    -> 135
+18 PAC                            -> 421
+19 PAC Bigeminy                   -> 181
+20 Bundle Branch Block            -> 95
+21 Artifact                       -> 108
+22 Sinus Bradycardia + PVC        -> 60
+23 Sinus Tachycardia + PVC        -> 60
+24 Sinus Bradycardia + PAC        -> 60
+25 Sinus Tachycardia + PAC        -> 63
+26 Atrial Fibrillation + PVC      -> 61
+27 Atrial Flutter + PVC           -> 66
+28 1st Degree AV Block + PVC      -> 60
+29 Sinus Bradycardia + PVC Bigeminy -> 40
+30 Sinus Tachycardia + PVC Bigeminy -> 40
+31 Atrial Couplet                 -> 53
+32 Atrial Run                     -> 43
+33 Ventricular Run                -> 0
+34 NSVT                           -> 0
+35 PSVT                           -> 2
+36 Pause                          -> 0
+
+======================================================================
+PATIENT-LEVEL SPLIT (preventing data leakage)
+======================================================================
+Total samples: 43907
+Unique patients: 1
+⚠️  WARNING: patient_id not available in database!
+⚠️  Falling back to record-level split (DATA LEAKAGE POSSIBLE)
+⚠️  This is NOT recommended for medical ML!
+
+======================================================================
+CREATING TRAIN (augmented) AND VAL (no augment) DATASETS
+======================================================================
+Connecting to DB (Pre-loading optimized)...
+⚠️  patient_id column NOT found - will use record-level split (DATA LEAKAGE POSSIBLE)
+Executing query...
+Fetched 43907 rows. Processing...
+[SQL DATASET] Indexed 43907 segments. RAM Cache Ready.
+[SQL DATASET] All signals pre-loaded. NO SQL connections in __getitem__.
+Connecting to DB (Pre-loading optimized)...
+⚠️  patient_id column NOT found - will use record-level split (DATA LEAKAGE POSSIBLE)
+Executing query...
+Fetched 43907 rows. Processing...
+[SQL DATASET] Indexed 43907 segments. RAM Cache Ready.
+[SQL DATASET] All signals pre-loaded. NO SQL connections in __getitem__.
+✅ Train dataset: 37320 samples (augmentation=ON)
+✅ Val dataset: 6587 samples (augmentation=OFF)
+
+======================================================================
+CLASS WEIGHTS FOR FOCAL LOSS
+======================================================================
+Class weights: [ 0.17433548 15.406563    1.0123634   1.5740662   1.8106581   1.8131642
+ 15.406563    3.5345078   3.5345078   3.5345078  34.45012     3.5345078
+  3.5345078  34.45012     2.4670243   2.9649942   2.9649942   2.9649942
+  1.6789962   2.5606573   3.5345078   3.3149643   4.4474916   4.4474916
+  4.4474916   4.340307    4.410886    4.2405167   4.4474916   5.4470425
+  5.4470425   4.732088    5.2535944  34.45012    34.45012    24.359913
+ 34.45012   ]
+
+======================================================================
+CREATING WEIGHTED SAMPLER
+======================================================================
+✅ Weighted sampler created: 74640 samples per epoch
+
+Epoch 1/30
+Train: loss=2.1210, acc=0.7983
+Val  : loss=0.6795, acc=0.0741
+Per-class accuracy:
+  Sinus Rhythm                            : 0.000
+  Sinus Bradycardia                       : 0.000
+  Sinus Tachycardia                       : 0.741
+  Supraventricular Tachycardia            : 1.000
+  Atrial Fibrillation                     : 0.164
+  Atrial Flutter                          : 0.963
+  Junctional Rhythm                       : 1.000
+  Idioventricular Rhythm                  : 1.000
+  Ventricular Tachycardia                 : 1.000
+  Ventricular Fibrillation                : 1.000
+  1st Degree AV Block                     : 0.000
+  2nd Degree AV Block Type 1              : 0.571
+  2nd Degree AV Block Type 2              : 0.571
+  3rd Degree AV Block                     : 0.000
+  PVCs                                    : 0.069
+  PVC Bigeminy                            : 0.000
+  PVC Trigeminy                           : 1.000
+  PVC Couplet                             : 1.000
+  PAC                                     : 0.000
+  PAC Bigeminy                            : 0.481
+  Bundle Branch Block                     : 1.000
+  Artifact                                : 0.812
+  Sinus Bradycardia + PVC                 : 1.000
+  Sinus Tachycardia + PVC                 : 1.000
+  Sinus Bradycardia + PAC                 : 1.000
+  Sinus Tachycardia + PAC                 : 1.000
+  Atrial Fibrillation + PVC               : 1.000
+  Atrial Flutter + PVC                    : 1.000
+  1st Degree AV Block + PVC               : 1.000
+  Sinus Bradycardia + PVC Bigeminy        : 1.000
+  Sinus Tachycardia + PVC Bigeminy        : 1.000
+  Atrial Couplet                          : 0.500
+  Atrial Run                              : 0.571
+  Ventricular Run                         : 0.000
+  NSVT                                    : 0.000
+  PSVT                                    : 0.000
+  Pause                                   : 0.000
+Balanced Accuracy: 0.6066
+✅ Saved new best model (balanced acc: 0.6066)
+
+Epoch 2/30
+Train: loss=0.4624, acc=0.9139
+Val  : loss=0.6303, acc=0.0756
+Per-class accuracy:
+  Sinus Rhythm                            : 0.000
+  Sinus Bradycardia                       : 0.000
+  Sinus Tachycardia                       : 0.724
+  Supraventricular Tachycardia            : 0.986
+  Atrial Fibrillation                     : 0.673
+  Atrial Flutter                          : 0.241
+  Junctional Rhythm                       : 1.000
+  Idioventricular Rhythm                  : 1.000
+  Ventricular Tachycardia                 : 1.000
+  Ventricular Fibrillation                : 1.000
+  1st Degree AV Block                     : 0.000
+  2nd Degree AV Block Type 1              : 1.000
+  2nd Degree AV Block Type 2              : 0.286
+  3rd Degree AV Block                     : 0.000
+  PVCs                                    : 0.172
+  PVC Bigeminy                            : 1.000
+  PVC Trigeminy                           : 0.800
+  PVC Couplet                             : 0.900
+  PAC                                     : 0.254
+  PAC Bigeminy                            : 0.148
+  Bundle Branch Block                     : 1.000
+  Artifact                                : 0.812
+  Sinus Bradycardia + PVC                 : 1.000
+  Sinus Tachycardia + PVC                 : 1.000
+  Sinus Bradycardia + PAC                 : 1.000
+  Sinus Tachycardia + PAC                 : 1.000
+  Atrial Fibrillation + PVC               : 1.000
+  Atrial Flutter + PVC                    : 1.000
+  1st Degree AV Block + PVC               : 1.000
+  Sinus Bradycardia + PVC Bigeminy        : 1.000
+  Sinus Tachycardia + PVC Bigeminy        : 1.000
+  Atrial Couplet                          : 0.375
+  Atrial Run                              : 0.571
+  Ventricular Run                         : 0.000
+  NSVT                                    : 0.000
+  PSVT                                    : 0.000
+  Pause                                   : 0.000
+Balanced Accuracy: 0.6201
+✅ Saved new best model (balanced acc: 0.6201)
+
+Epoch 3/30

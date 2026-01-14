@@ -15,6 +15,7 @@ import json
 import psycopg2
 from pathlib import Path
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -25,6 +26,28 @@ from tqdm import tqdm
 
 from data_loader import CLASS_NAMES, normalize_label, CLASS_INDEX
 from models import CNNTransformerClassifier
+
+
+# ---------------------------------------------------------------------
+# Logger Class for Automatic File Logging
+# ---------------------------------------------------------------------
+class TeeLogger:
+    """Redirects stdout to both console and file"""
+    def __init__(self, log_file):
+        self.terminal = sys.stdout
+        self.log = open(log_file, 'w', encoding='utf-8')
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+    
+    def close(self):
+        self.log.close()
 
 
 # ---------------------------------------------------------------------
@@ -69,14 +92,9 @@ class ECGRawDatasetSQL(torch.utils.data.Dataset):
         
         with psycopg2.connect(**self.conn_params) as conn:
             with conn.cursor() as cur:
-                # Check if patient_id and admission_id columns exist
-                cur.execute("""
-                    SELECT column_name 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'ecg_features_annotatable'
-                    AND column_name IN ('patient_id', 'admission_id')
-                """)
-                available_cols = [row[0] for row in cur.fetchall()]
+                # Robust check for patient_id and admission_id columns
+                cur.execute("SELECT * FROM ecg_features_annotatable LIMIT 0")
+                available_cols = [desc[0].lower() for desc in cur.description]
                 self.has_patient_id = 'patient_id' in available_cols
                 has_admission_id = 'admission_id' in available_cols
                 
@@ -288,6 +306,17 @@ def eval_epoch(model, criterion, loader, device, num_classes):
 # MAIN TRAIN LOOP
 # ---------------------------------------------------------------------
 def main():
+    # Initialize automatic logging
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOGS / f"training_{timestamp}.log"
+    logger = TeeLogger(log_file)
+    sys.stdout = logger
+    
+    print(f"{'='*70}")
+    print(f"TRAINING SESSION STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Log file: {log_file}")
+    print(f"{'='*70}\n")
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
@@ -486,6 +515,7 @@ def main():
         if balanced_acc > best_balanced_acc:
             best_balanced_acc = balanced_acc
             best_loss = va["loss"]
+            # Ensure model saving is active for this run
             torch.save(
                 {
                     "epoch": ep,
@@ -500,6 +530,16 @@ def main():
 
     print("\nTraining finished.\nBest model:", ckpt_path)
     print(f"Best balanced accuracy: {best_balanced_acc:.4f}")
+    
+    # Close logger and restore stdout
+    print(f"\n{'='*70}")
+    print(f"TRAINING SESSION COMPLETED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Log saved to: {log_file}")
+    print(f"{'='*70}")
+    
+    sys.stdout = logger.terminal
+    logger.close()
+
 
 
 if __name__ == "__main__":
