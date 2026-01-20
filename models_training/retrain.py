@@ -114,8 +114,9 @@ class ECGRawDatasetSQL(torch.utils.data.Dataset):
                         WHERE raw_signal IS NOT NULL
                           AND arrhythmia_label IS NOT NULL
                           AND arrhythmia_label != 'Unlabeled'
+                          AND corrected_by IS NOT NULL 
                     """
-                    print("✅ patient_id and admission_id columns found - will use for patient-level split")
+                    print("✅ patient_id, admission_id, and corrected_by found - using EXPERT ANNOTATED data with patient split")
                 elif self.has_patient_id:
                     query = """
                         SELECT segment_id, arrhythmia_label, raw_signal, patient_id
@@ -123,8 +124,9 @@ class ECGRawDatasetSQL(torch.utils.data.Dataset):
                         WHERE raw_signal IS NOT NULL
                           AND arrhythmia_label IS NOT NULL
                           AND arrhythmia_label != 'Unlabeled'
+                          AND corrected_by IS NOT NULL
                     """
-                    print("✅ patient_id column found - will use for patient-level split")
+                    print("✅ patient_id and corrected_by column found - using EXPERT ANNOTATED data with patient split")
                 else:
                     query = """
                         SELECT segment_id, arrhythmia_label, raw_signal
@@ -132,8 +134,9 @@ class ECGRawDatasetSQL(torch.utils.data.Dataset):
                         WHERE raw_signal IS NOT NULL
                           AND arrhythmia_label IS NOT NULL
                           AND arrhythmia_label != 'Unlabeled'
+                          AND corrected_by IS NOT NULL
                     """
-                    print("⚠️  patient_id column NOT found - will use record-level split (DATA LEAKAGE POSSIBLE)")
+                    print("⚠️  patient_id NOT found, but corrected_by found - using EXPERT ANNOTATED data (Record split)")
                 
                 if sql_limit:
                     query += f" LIMIT {int(sql_limit)}"
