@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package ecgstream;
+
+service ECGService {
+  // Bi-directional stream: Client sends ECGData, Server sends ArrhythmiaAlerts
+  rpc StreamECG (stream ECGData) returns (stream ArrhythmiaAlert);
+}
+
+message ECGData {
+  repeated float values = 1; // List of ECG voltage values (in mV)
+  string device_id = 2;      // Unique ID of the device
+  int64 timestamp = 3;       // Unix timestamp (ms)
+  int32 sample_rate = 4;     // Sample rate of the incoming data (e.g., 125 or 250)
+}
+
+message ArrhythmiaAlert {
+  string arrhythmia_type = 1; // Detected class (e.g., "Atrial Fibrillation")
+  float confidence = 2;       // Confidence score (0.0 to 1.0)
+  string message = 3;         // Human-readable message
+  int64 timestamp = 4;        // Time of detection (ms)
+}
